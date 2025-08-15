@@ -1,0 +1,47 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 class="h2 mb-0">Intelligent Inbox</h1>
+    <p class="text-muted">AI-powered email management and prioritization</p>
+  </div>
+  <a href="/recent_classified" class="btn btn-primary">Refresh</a>
+</div>
+
+<div class="mb-4">
+  <a href="/recent_classified" class="btn btn-secondary me-2">Show All</a>
+  <a href="/recent_classified?category=Urgent" class="btn btn-danger me-2">
+    Urgent <span class="badge bg-light text-dark ms-1">{{ counts.get('Urgent', 0) }}</span>
+  </a>
+  <a href="/recent_classified?category=To Respond" class="btn btn-warning me-2">
+    To Respond <span class="badge bg-light text-dark ms-1">{{ counts.get('To Respond', 0) }}</span>
+  </a>
+  <a href="/recent_classified?category=Meeting" class="btn btn-primary me-2">
+    Meeting <span class="badge bg-light text-dark ms-1">{{ counts.get('Meeting', 0) }}</span>
+  </a>
+  <a href="/recent_classified?category=FYI" class="btn btn-info">
+    FYI <span class="badge bg-light text-dark ms-1">{{ counts.get('FYI', 0) }}</span>
+  </a>
+</div>
+
+{% for item in classifications %}
+<div class="card mb-3 bg-dark border-secondary">
+    <div class="card-body">
+        <div class="d-flex w-100">
+            <div class="flex-grow-1">
+                <h5 class="mb-1">{{ item.sender }} <span class="badge bg-{{ category_colors.get(item.category, 'secondary') }}">{{ item.category }}</span></h5>
+                <p class="mb-1"><strong>{{ item.subject }}</strong></p>
+                <p class="mb-0 text-muted"><small>{{ item.summary }}</small></p>
+            </div>
+            <div>
+                <small class="text-muted">{{ item.created_at[:10] }}</small>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">No classified emails in history.</div>
+{% endfor %}
+
+{% endblock %}

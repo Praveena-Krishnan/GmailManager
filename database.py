@@ -1,69 +1,56 @@
-# In database.py
-
+# in database.py
 import sqlite3
 
 DATABASE_FILE = 'history.db'
 
 def get_db_connection():
-    """Creates a database connection with a longer timeout."""
-    # MODIFIED: Added a timeout of 10 seconds to prevent "database is locked" errors
-    # during rapid notifications.
     conn = sqlite3.connect(DATABASE_FILE, timeout=10)
     conn.row_factory = sqlite3.Row
     return conn
 
 def init_db():
-    """Initializes the database using the schema.sql file."""
     conn = get_db_connection()
     with open('schema.sql') as f:
         conn.executescript(f.read())
     conn.close()
     print("Database has been initialized.")
 
-def add_classification(result):
-    """Adds a new classification result to the database."""
+# MODIFIED: This function now accepts the message ID
+def add_classification(message_id, result):
     conn = get_db_connection()
-
-    # MODIFIED: Use .get() with default values to prevent NOT NULL errors
-    # if Gemini fails to return a specific field.
-    subject = result.get('subject', 'No Subject Provided')
-    sender = result.get('sender', 'Unknown Sender')
-    body = result.get('body', '')
-    category = result.get('category', 'Uncategorized')
-    confidence = result.get('confidence', 0.0)
-    reason = result.get('reason', 'No reason provided.')
-    summary = result.get('summary', 'No summary provided.')
     important_terms_str = ', '.join(result.get('important_terms', []))
-    response_draft = result.get('response_draft', 'No draft generated.')
-
-    conn.execute(
+    cursor = conn.cursor()
+    cursor.execute(
         '''INSERT INTO classifications
-           (subject, sender, body, category, confidence, reason, summary, important_terms, response_draft)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-        (subject, sender, body, category, confidence, reason, summary, important_terms_str, response_draft)
+           (gmail_message_id, subject, sender, body, category, confidence, reason, summary, important_terms, response_draft)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+        (message_id, result.get('subject', 'No Subject'), result.get('sender', 'Unknown Sender'), result.get('body', ''),
+         result.get('category', 'Uncategorized'), result.get('confidence', 0.0), result.get('reason', 'N/A'),
+         result.get('summary', 'N/A'), important_terms_str, result.get('response_draft', 'N/A'))
     )
+    last_id = cursor.lastrowid
     conn.commit()
     conn.close()
-    
-# Add this function to the end of database.py
+    return last_id
 
-def check_if_exists(subject, sender):
-    """Checks if a classification with a similar subject and sender already exists."""
+# ... (get_recent_classifications and get_category_counts are unchanged) ...
+def get_recent_classifications(category_filter=None, limit=25):
     conn = get_db_connection()
-    # A simple check: if a record from the same sender with the same subject exists,
-    # assume it's a duplicate notification. For more accuracy, you could also check the timestamp.
-    record = conn.execute(
-        'SELECT id FROM classifications WHERE subject = ? AND sender = ?', (subject, sender)
-    ).fetchone()
-    conn.close()
-    return record is not None
-
-def get_recent_classifications(limit=25):
-    """Retrieves the most recent classification results from the database."""
-    conn = get_db_connection()
-    classifications = conn.execute(
-        'SELECT * FROM classifications ORDER BY id DESC LIMIT ?', (limit,)
-    ).fetchall()
+    query = 'SELECT * FROM classifications'
+    params = []
+    if category_filter:
+        query += ' WHERE category = ?'
+        params.append(category_filter)
+    query += ' ORDER BY id DESC LIMIT ?'
+    params.append(limit)
+    classifications = conn.execute(query, tuple(params)).fetchall()
     conn.close()
     return classifications
 
+def get_category_counts():
+    conn = get_db_connection()
+    counts = conn.execute('SELECT category, COUNT(id) as count FROM classifications GROUP BY category').fetchall()
+    conn.close()
+    return {row['category']: row['count'] for row in counts}
+
+# DELETED: The check_if_exists function is no longer needed.
