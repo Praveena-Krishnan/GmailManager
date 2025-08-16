@@ -18,4 +18,26 @@ CREATE TABLE classifications (
     response_draft TEXT
 );
 
+
 -- ... (your suggested_events table can remain here if you created it) ...
+
+CREATE TABLE suggested_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    type TEXT NOT NULL, -- 'meeting' or 'deadline'
+    summary TEXT NOT NULL,
+    time_expression TEXT NOT NULL, -- MODIFIED: Replaced start_time and end_time
+    description TEXT,
+    source_email_id INTEGER,
+    FOREIGN KEY (source_email_id) REFERENCES classifications (id)
+);
+
+CREATE TABLE reminders (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    summary TEXT NOT NULL,
+    due_date TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'active', -- active, completed
+    source_email_id INTEGER,
+    FOREIGN KEY (source_email_id) REFERENCES classifications (id)
+);

@@ -1,6 +1,4 @@
-# In app.py
-
-from flask import Flask, redirect, request, session, render_template # MODIFIED
+from flask import Flask, redirect, request, session, render_template
 import requests
 import os
 from dotenv import load_dotenv
@@ -10,6 +8,8 @@ import re
 import database
 import gmail_service
 import gemini_service
+from dateutil.parser import parse
+from datetime import timedelta, timezone
 
 load_dotenv()
 
@@ -29,24 +29,17 @@ PUBSUB_TOPIC = os.getenv("PUBSUB_TOPIC")
 PUBSUB_VERIFICATION_TOKEN = os.getenv("PUBSUB_VERIFICATION_TOKEN")
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
-
 last_tokens = {}
-
-# DELETED: The old BASE_HTML string and render_with_bootstrap function are gone.
 
 # --- Authentication Routes ---
 @app.route("/")
 def index():
-    # If user is already logged in, redirect to the main inbox page
-    if "user" in session:
-        return redirect("/recent_classified")
-    
-    # MODIFIED: Render the new, professional login page
+    if "user" in session: return redirect("/recent_classified")
     return render_template("login.html")
 
 @app.route("/login")
 def login():
-    scope = ("openid email profile https://mail.google.com/ https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/calendar.events")
+    scope = ("openid email profile https://mail.google.com/ https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/calendar https://www.googleapis.com/auth/gmail.send")
     return redirect(f"{AUTH_URL}?client_id={CLIENT_ID}&redirect_uri={REDIRECT_URI}&response_type=code&scope={scope}&access_type=offline&prompt=consent")
 
 @app.route("/callback")
@@ -55,69 +48,86 @@ def callback():
     token_data = {"code": code, "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET, "redirect_uri": REDIRECT_URI, "grant_type": "authorization_code"}
     tokens = requests.post(TOKEN_URL, data=token_data).json()
     user_info = requests.get("https://www.googleapis.com/oauth2/v3/userinfo", headers={"Authorization": f"Bearer {tokens.get('access_token')}"}).json()
-    
     session["user"] = user_info
     session["tokens"] = tokens
-    
     global last_tokens
     last_tokens = tokens.copy()
-    
     gmail_service.start_gmail_watch(tokens.get("access_token"), PUBSUB_TOPIC)
-    # MODIFIED: Redirect to the main inbox page after login
     return redirect("/recent_classified")
 
 # --- Application Routes ---
-# DELETED: The old /home route is no longer needed, /recent_classified is the new home.
-
-
 @app.route("/recent_classified")
 def recent_classified_view():
     category_filter = request.args.get('category', None)
-    
-    # Fetch all the necessary data from the database
     classifications = database.get_recent_classifications(category_filter=category_filter)
     category_counts = database.get_category_counts()
-    
-    category_colors = {
-        "Urgent": "danger", "To Respond": "warning", "Meeting": "primary",
-        "FYI": "info", "Uncategorized": "secondary"
-    }
+    category_colors = {"Urgent": "danger", "To Respond": "warning", "Meeting": "primary", "FYI": "info", "Uncategorized": "secondary"}
+    return render_template("history.html", classifications=classifications, counts=category_counts, category_colors=category_colors)
 
-    # Pass the raw data directly to the template
+# In app.py
+
+@app.route("/classification/<int:classification_id>")
+def classification_detail_view(classification_id):
+    classification = database.get_classification_by_id(classification_id)
+    if not classification:
+        return "Classification not found", 404
+
+    # NEW: Fetch the corresponding event suggestion, if one exists
+    suggestion = database.get_suggestion_by_classification_id(classification_id)
+
+    # Logic to highlight important terms in the summary
+    summary = classification['summary']
+    if classification['important_terms']:
+        terms = [term.strip() for term in classification['important_terms'].split(',')]
+        for term in terms:
+            if term:
+                summary = re.sub(f'({re.escape(term)})', r'<span class="highlight">\1</span>', summary, flags=re.IGNORECASE)
+
+    # MODIFIED: Pass the new 'suggestion' object to the template
     return render_template(
-        "history.html",
-        classifications=classifications,
-        counts=category_counts,
-        category_colors=category_colors
+        "detail.html",
+        classification=classification,
+        highlighted_summary=summary,
+        suggestion=suggestion
     )
-    
-    
 
+@app.route("/send_reply/<int:classification_id>", methods=["POST"])
+def send_reply(classification_id):
+    tokens = session.get("tokens")
+    if not tokens: return redirect("/")
+    classification = database.get_classification_by_id(classification_id)
+    if not classification: return "Error: Original message not found.", 404
+    reply_body = request.form.get("reply_body")
+    original_message = gmail_service.get_full_message(tokens.get("access_token"), classification['gmail_message_id'])
+    if not original_message: return "Error: Could not fetch original thread info from Gmail.", 500
+    thread_id = original_message.get('threadId')
+    to_address = classification['sender']
+    subject = f"Re: {classification['subject']}"
+    success = gmail_service.send_reply(tokens.get("access_token"), to_address, subject, reply_body, thread_id)
+    if success: return redirect("/recent_classified")
+    else: return "Failed to send email.", 500
+
+# --- Background Webhook Route ---
 @app.route("/pubsub/push", methods=["POST"])
 def pubsub_push():
     if PUBSUB_VERIFICATION_TOKEN and request.args.get("token") != PUBSUB_VERIFICATION_TOKEN: return "Unauthorized", 401
-    
     envelope = request.get_json(force=True, silent=True)
     if not (envelope and "message" in envelope): return "Bad Request", 400
-    
     try:
         global last_tokens
-        access_token = last_tokens.get("access_token") or gmail_service.refresh_access_token(
-            CLIENT_ID, CLIENT_SECRET, last_tokens.get("refresh_token")
-        )
+        access_token = last_tokens.get("access_token") or gmail_service.refresh_access_token(CLIENT_ID, CLIENT_SECRET, last_tokens.get("refresh_token"))
         if not access_token:
             print("Failed to get a valid access token.")
             return "No valid token", 200
         last_tokens['access_token'] = access_token
 
         message = gmail_service.get_latest_unread_message(access_token)
-        if not message:
-            return "OK", 200
+        if not message: return "OK", 200
         
         mid = message.get('id')
         thread_id = message.get('threadId')
-        
         email_timestamp = int(message.get('internalDate', 0))
+
         if email_timestamp < STARTUP_TIMESTAMP:
             print(f"Ignoring old email (ID: {mid}) from before app startup.")
             gmail_service.mark_as_read(access_token, mid)
@@ -126,100 +136,132 @@ def pubsub_push():
         subject = next((h["value"] for h in message["payload"]["headers"] if h["name"].lower() == "subject"), "")
         sender = next((h["value"] for h in message["payload"]["headers"] if h["name"].lower() == "from"), "")
         body = gmail_service.get_email_body(message["payload"])
+        email_content = {"subject": subject, "sender": sender, "body": body}
 
-        # STEP 1: Perform a quick classification on the latest email ONLY.
-        result = gemini_service.process_single_email_with_gemini({"subject": subject, "sender": sender, "body": body})
+        # AI Call 1: Classify Email
+        classification_result = gemini_service.process_single_email_with_gemini(email_content)
+        if not classification_result:
+            print(f"Initial classification failed for message {mid}. Marking as read to avoid loops.")
+            gmail_service.mark_as_read(access_token, mid)
+            return "OK", 200
 
-        if not result:
-             print(f"Initial classification failed for message {mid}. Marking as read to avoid loops on bad emails.")
-             gmail_service.mark_as_read(access_token, mid)
-             return "OK", 200
-
-        # STEP 2: If the category is "To Respond", get the full thread and generate a better draft.
-        if result.get('category') == 'To Respond':
-            print(f"Category is 'To Respond'. Fetching full thread {thread_id} for a better draft...")
+        # AI Call 2 (Conditional): Generate Smart Draft
+        response_draft = classification_result.get('response_draft', "No draft.")
+        if classification_result.get('category') == 'To Respond':
             thread_data = gmail_service.get_full_thread(access_token, thread_id)
             if thread_data and thread_data.get('messages'):
-                conversation_str = ""
-                for i, msg_in_thread in enumerate(thread_data['messages']):
-                    headers = msg_in_thread['payload']['headers']
-                    msg_sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), '')
-                    msg_body = gmail_service.get_email_body(msg_in_thread['payload'])
-                    conversation_str += f"--- Email {i+1} From: {msg_sender} ---\n{msg_body}\n\n"
-                
+                conversation_str = "".join([f"--- Email From: {next((h['value'] for h in m['payload']['headers'] if h['name'].lower() == 'from'), '')} ---\n{gmail_service.get_email_body(m['payload'])}\n\n" for m in thread_data['messages']])
                 new_draft = gemini_service.generate_draft_from_thread(conversation_str)
                 if new_draft:
-                    print("Successfully generated a new draft based on the full thread.")
-                    result['response_draft'] = new_draft
-        
-        # Now, save the final result using the robust de-duplication method
+                    response_draft = new_draft
+        classification_result['response_draft'] = response_draft
+
+        # CORRECTED LOGIC: Save the main classification FIRST to get its ID
         try:
-            database.add_classification(mid, result)
-            gmail_service.mark_as_read(access_token, mid)
+            classification_id = database.add_classification(mid, classification_result)
         except sqlite3.IntegrityError:
-            # This error happens if the UNIQUE constraint fails, meaning it's a duplicate.
-            print(f"Duplicate message (ID: {mid}) ignored by database UNIQUE constraint.")
+            print(f"Duplicate message (ID: {mid}) ignored.")
             gmail_service.mark_as_read(access_token, mid)
+            return "OK", 200
+
+        # AI Call 3 (Conditional): Find Events
+        if classification_result.get('category') in ['Meeting', 'To Respond', 'Urgent']:
+            event_result = gemini_service.find_event_in_email(email_content)
+            if event_result and event_result.get('event_details'):
+                print(f"Found a potential event: {event_result['event_details']['summary']}")
+                database.add_suggestion(event_result['event_details'], classification_id)
         
+        gmail_service.mark_as_read(access_token, mid)
         return "OK", 200
     except Exception as e:
         print(f"Push handler error: {e}")
         return "OK", 200
     
+# In app.py
 
+@app.route("/check_conflicts/<int:suggestion_id>")
+def check_conflicts(suggestion_id):
+    tokens = session.get("tokens")
+    if not tokens: 
+        return {"error": "Not authenticated"}, 401
 
+    # Get the specific suggestion from the database
+    suggestion = database.get_suggestion(suggestion_id)
+    if not suggestion: 
+        return {"error": "Suggestion not found"}, 404
 
-# Replace the existing detail view function in app.py
-@app.route("/classification/<int:classification_id>")
-def classification_detail_view(classification_id):
-    classification = database.get_classification_by_id(classification_id)
-    if not classification:
-        return "Classification not found", 404
+    time_expression = suggestion['time_expression']
+    
+    try:
+        # Parse the human-readable time from the database
+        start_time = parse(time_expression)
+        # Assume a 1-hour duration if no end time is specified
+        end_time = start_time + timedelta(hours=1)
+    except Exception as e:
+        print(f"Date parsing error: {e}")
+        return {"error": f"Could not understand the date/time: '{time_expression}'"}, 400
 
-    # Logic to highlight important terms in the summary
-    summary = classification['summary']
-    if classification['important_terms']:
-        # Get a list of terms, stripping any extra whitespace
-        terms = [term.strip() for term in classification['important_terms'].split(',')]
-        for term in terms:
-            if term: # Ensure term is not an empty string
-                # Use regex for a case-insensitive replacement
-                summary = re.sub(f'({re.escape(term)})', r'<span class="highlight">\1</span>', summary, flags=re.IGNORECASE)
+    # Format for Google Calendar API (RFC3339)
+    start_iso = start_time.astimezone(timezone.utc).isoformat()
+    end_iso = end_time.astimezone(timezone.utc).isoformat()
 
-    return render_template("detail.html", classification=classification, highlighted_summary=summary)
+    # Check for conflicting events in Google Calendar
+    calendar_url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+    params = {
+        'timeMin': start_iso,
+        'timeMax': end_iso,
+        'singleEvents': True,
+        'orderBy': 'startTime'
+    }
+    res = requests.get(calendar_url, headers={"Authorization": f"Bearer {tokens.get('access_token')}"}, params=params)
+    
+    conflicts = []
+    if res.status_code == 200:
+        conflicts = [event.get('summary') for event in res.json().get('items', [])]
+    else:
+        print(f"Error checking calendar: {res.text}")
 
+    # Placeholder for a short description (can be upgraded with another AI call later)
+    short_description = "AI-suggested event"
 
-@app.route("/send_reply/<int:classification_id>", methods=["POST"])
-def send_reply(classification_id):
+    return {
+        "details": {
+            "summary": suggestion['summary'],
+            "time_expression": time_expression
+        },
+        "short_description": short_description,
+        "conflicts": conflicts
+    }
+
+@app.route("/schedule_event/<int:classification_id>")
+def schedule_event(classification_id):
     tokens = session.get("tokens")
     if not tokens: return redirect("/")
-    
+
     classification = database.get_classification_by_id(classification_id)
-    if not classification:
-        return "Error: Original message not found.", 404
+    if not classification: return "Error: Suggestion not found.", 404
 
-    reply_body = request.form.get("reply_body")
+    # This logic would be the same as in the conflict check
+    time_expression = "August 24th, 2025 at 2pm"
+    start_time = parse(time_expression)
+    end_time = start_time + timedelta(hours=1)
     
-    # We need the original thread ID to send a proper reply
-    # This requires fetching the original message from Gmail again
-    original_message = gmail_service.get_full_message(tokens.get("access_token"), classification['gmail_message_id'])
-    if not original_message:
-        return "Error: Could not fetch original thread info from Gmail.", 500
-
-    thread_id = original_message.get('threadId')
+    event = {
+        'summary': classification['summary'],
+        'description': f"Event created by Zentra based on email: {classification['subject']}",
+        'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
+        'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
+    }
     
-    # The 'To' address is the original sender
-    to_address = classification['sender']
-    # The subject of a reply is typically "Re: [Original Subject]"
-    subject = f"Re: {classification['subject']}"
+    calendar_url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+    res = requests.post(calendar_url, headers={"Authorization": f"Bearer {tokens.get('access_token')}"}, json=event)
 
-    success = gmail_service.send_reply(tokens.get("access_token"), to_address, subject, reply_body, thread_id)
-
-    if success:
-        # After sending, redirect back to the inbox
+    if res.status_code in [200, 201]:
+        # In a real app, you would also update the suggestion status in your DB
+        # database.update_suggestion_status(suggestion_id, 'accepted')
         return redirect("/recent_classified")
     else:
-        return "Failed to send email.", 500
-    
+        return f"Error creating event: {res.text}", 500
+
 if __name__ == "__main__":
     app.run(debug=False, host='0.0.0.0', port=5000)

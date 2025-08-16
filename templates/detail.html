@@ -3,12 +3,12 @@
 {% block content %}
 <style>
   .highlight {
-        background-color: #f0ad4e; /* A lighter, more muted yellow/orange */
-        color: #fff;             /* White text for better contrast */
-        padding: 0.1em 0.4em;
-        border-radius: 0.2rem;
-        font-weight: 500;
-      }
+    background-color: #f0ad4e; /* A lighter, more muted yellow/orange */
+    color: #fff;             /* White text for better contrast */
+    padding: 0.1em 0.4em;
+    border-radius: 0.2rem;
+    font-weight: 500;
+  }
 </style>
 
 <div class="mb-4 d-flex justify-content-between align-items-center">
@@ -29,6 +29,16 @@
           {{ highlighted_summary | safe }}
         </p>
         
+        {% if classification.important_terms %}
+        <h5 class="card-title mt-4">Important Terms</h5>
+        <div class="mb-4">
+            {% for term in classification.important_terms.split(',') %}
+                {% if term.strip() %}
+                    <span class="badge bg-secondary me-1">{{ term.strip() }}</span>
+                {% endif %}
+            {% endfor %}
+        </div>
+        {% endif %}
 
         <hr>
 
@@ -68,7 +78,15 @@
             View/Edit AI Response
           </button>
           {% endif %}
-          <button class="btn btn-outline-secondary" type="button" disabled>Schedule Meeting (Coming Soon)</button>
+
+          {% if suggestion %}
+          <button id="scheduleBtn" class="btn btn-outline-secondary" type="button" 
+                  data-suggestion-id="{{ suggestion.id }}" 
+                  data-bs-toggle="modal" data-bs-target="#scheduleModal">
+            Schedule Event
+          </button>
+          {% endif %}
+
         </div>
         <div class="collapse mt-3" id="collapseDraft">
           <form action="/send_reply/{{ classification.id }}" method="post">
@@ -80,4 +98,69 @@
     </div>
   </div>
 </div>
+
+<div class="modal fade" id="scheduleModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content bg-dark">
+      <div class="modal-header border-secondary">
+        <h5 class="modal-title">Schedule This Event?</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body" id="modalBody">
+        <div class="text-center">
+          <div class="spinner-border" role="status">
+            <span class="visually-hidden">Loading...</span>
+          </div>
+          <p class="mt-2">Checking your calendar for conflicts...</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const scheduleModalEl = document.getElementById('scheduleModal');
+  if (scheduleModalEl) {
+    const modalBody = document.getElementById('modalBody');
+    
+    scheduleModalEl.addEventListener('show.bs.modal', async function (event) {
+      const button = event.relatedTarget; // Button that triggered the modal
+      const suggestionId = button.dataset.suggestionId;
+
+      modalBody.innerHTML = `<div class="text-center"><div class="spinner-border" role="status"><span class="visually-hidden">Loading...</span></div><p class="mt-2">Checking your calendar...</p></div>`;
+
+      try {
+        const response = await fetch(`/check_conflicts/${suggestionId}`);
+        const data = await response.json();
+
+        if (!response.ok) {
+          modalBody.innerHTML = `<div class="alert alert-danger">${data.error || 'Could not check for conflicts.'}</div>`;
+          return;
+        }
+        
+        let conflictHTML = '<p class="text-success small"><i class="bi bi-check-circle-fill"></i> No conflicts found on your calendar.</p>';
+        if (data.conflicts && data.conflicts.length > 0) {
+          conflictHTML = '<p class="text-danger small"><i class="bi bi-exclamation-triangle-fill"></i> Clashes with:</p><ul class="list-unstyled small">';
+          data.conflicts.forEach(c => { conflictHTML += `<li>- ${c}</li>`; });
+          conflictHTML += '</ul>';
+        }
+
+        modalBody.innerHTML = `
+          <h5>${data.details.summary}</h5>
+          <p class="text-muted">${data.details.time_expression}</p>
+          <hr>
+          ${conflictHTML}
+          <div class="d-grid gap-2 mt-4">
+              <a href="/schedule_event/${suggestionId}" class="btn btn-success">Confirm and Add to Calendar</a>
+              <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+          </div>
+        `;
+      } catch (error) {
+        modalBody.innerHTML = `<div class="alert alert-danger">An error occurred while checking your calendar.</div>`;
+      }
+    });
+  }
+});
+</script>
 {% endblock %}

@@ -15,8 +15,7 @@ def init_db():
     conn.close()
     print("Database has been initialized.")
 
-# MODIFIED: This function now accepts the message ID
-# In database.py
+
 
 def add_classification(message_id, result):
     conn = get_db_connection()
@@ -59,7 +58,7 @@ def get_category_counts():
 
 # DELETED: The check_if_exists function is no longer needed.
 
-# Add this function to database.py
+
 
 def get_classification_by_id(classification_id):
     """Retrieves a single classification by its database ID."""
@@ -69,3 +68,40 @@ def get_classification_by_id(classification_id):
     ).fetchone()
     conn.close()
     return classification
+
+# In database.py
+
+def add_suggestion(event_details, source_email_id):
+    conn = get_db_connection()
+    conn.execute(
+        # MODIFIED: Inserts the new time_expression field
+        'INSERT INTO suggested_events (type, summary, time_expression, description, source_email_id) VALUES (?, ?, ?, ?, ?)',
+        (event_details.get('type'), event_details.get('summary'),
+         event_details.get('time_expression'), event_details.get('description'), source_email_id)
+    )
+    conn.commit()
+    conn.close()
+    
+# Add this new function to database.py
+
+def get_suggestion_by_classification_id(classification_id):
+    """Finds a pending event suggestion linked to a classification ID."""
+    conn = get_db_connection()
+    suggestion = conn.execute(
+        "SELECT * FROM suggested_events WHERE source_email_id = ? AND status = 'pending'",
+        (classification_id,)
+    ).fetchone()
+    conn.close()
+    return suggestion
+
+
+# Add this new function to database.py
+
+def get_suggestion(suggestion_id):
+    """Retrieves a single event suggestion by its own ID."""
+    conn = get_db_connection()
+    suggestion = conn.execute(
+        'SELECT * FROM suggested_events WHERE id = ?', (suggestion_id,)
+    ).fetchone()
+    conn.close()
+    return suggestion

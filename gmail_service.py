@@ -1,37 +1,47 @@
-# In gmail_service.py
-
 import requests
 import base64
-
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
 
 GMAIL_API_BASE_URL = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 def get_latest_unread_message(access_token):
-    """Fetches the latest unread message from the user's inbox."""
     url = f"{GMAIL_API_BASE_URL}/messages"
     params = {"maxResults": 1, "labelIds": "INBOX", "q": "is:unread"}
     headers = {"Authorization": f"Bearer {access_token}"}
-
     list_res = requests.get(url, headers=headers, params=params)
     if list_res.status_code != 200:
         print(f"Error listing messages: {list_res.text}")
         return None
-
     messages = list_res.json().get("messages", [])
-    if not messages:
+    if not messages: return None
+    return get_full_message(access_token, messages[0]['id'])
+
+# NEW FUNCTION to get a single message by its ID
+def get_full_message(access_token, msg_id):
+    """Fetches a single, complete message object by its ID."""
+    url = f"{GMAIL_API_BASE_URL}/messages/{msg_id}"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    params = {"format": "full"}
+    res = requests.get(url, headers=headers, params=params)
+    if res.status_code == 200:
+        return res.json()
+    else:
+        print(f"Error getting message {msg_id}: {res.text}")
         return None
 
-    msg_id = messages[0]['id']
-    msg_url = f"{GMAIL_API_BASE_URL}/messages/{msg_id}"
-    get_res = requests.get(msg_url, headers=headers, params={"format": "full"})
-    if get_res.status_code != 200:
-        print(f"Error getting message {msg_id}: {get_res.text}")
+def get_full_thread(access_token, thread_id):
+    url = f"{GMAIL_API_BASE_URL}/threads/{thread_id}"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    params = {"format": "full"}
+    res = requests.get(url, headers=headers, params=params)
+    if res.status_code == 200:
+        return res.json()
+    else:
+        print(f"Error getting thread {thread_id}: {res.text}")
         return None
-
-    return get_res.json()
 
 def get_email_body(payload):
-    """Extracts the plain text body from an email payload."""
     if 'parts' in payload:
         for part in payload['parts']:
             if part['mimeType'] == 'text/plain':
@@ -44,78 +54,32 @@ def get_email_body(payload):
     return ""
 
 def start_gmail_watch(access_token, topic_name):
-    """Registers the push notification watch on the user's inbox."""
     url = f"{GMAIL_API_BASE_URL}/watch"
     body = {"topicName": topic_name, "labelIds": ["INBOX"]}
     headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
     requests.post(url, headers=headers, json=body)
 
 def mark_as_read(access_token, msg_id):
-    """Marks a specific message as read by removing the UNREAD label."""
     url = f"{GMAIL_API_BASE_URL}/messages/{msg_id}/modify"
     headers = {"Authorization": f"Bearer {access_token}"}
     payload = {"removeLabelIds": ["UNREAD"]}
-    r = requests.post(url, headers=headers, json=payload)
-    if r.status_code == 200:
-        print(f"Successfully marked message {msg_id} as read.")
-    else:
-        print(f"Failed to mark message {msg_id} as read.")
+    requests.post(url, headers=headers, json=payload)
 
 def refresh_access_token(client_id, client_secret, refresh_token):
-    """Refreshes the OAuth access token."""
     url = "https://oauth2.googleapis.com/token"
-    data = {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "refresh_token": refresh_token,
-        "grant_type": "refresh_token"
-    }
+    data = {"client_id": client_id, "client_secret": client_secret, "refresh_token": refresh_token, "grant_type": "refresh_token"}
     r = requests.post(url, data=data)
     if r.status_code == 200:
         return r.json().get("access_token")
     return None
 
-# Add this new function to gmail_service.py
-
-def get_full_thread(access_token, thread_id):
-    """Fetches all messages in a given thread."""
-    url = f"{GMAIL_API_BASE_URL}/threads/{thread_id}"
-    headers = {"Authorization": f"Bearer {access_token}"}
-    params = {"format": "full"} # Get full details for each message
-
-    res = requests.get(url, headers=headers, params=params)
-    if res.status_code != 200:
-        print(f"Error getting thread {thread_id}: {res.text}")
-        return None
-    
-    return res.json()
-
-# Add this function to gmail_service.py
-
-import base64
-from email.mime.text import MIMEText
-
 def send_reply(access_token, to_address, subject, body, thread_id):
-    """Sends an email reply."""
     url = f"{GMAIL_API_BASE_URL}/messages/send"
     headers = {"Authorization": f"Bearer {access_token}"}
-    
     message = MIMEText(body)
     message['to'] = to_address
     message['subject'] = subject
-    
-    # Create the raw message body
     raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
-    
-    payload = {
-        'raw': raw_message,
-        'threadId': thread_id # This makes sure it's a reply in the correct thread
-    }
-    
+    payload = {'raw': raw_message, 'threadId': thread_id}
     r = requests.post(url, headers=headers, json=payload)
-    if r.status_code == 200:
-        print("Reply sent successfully!")
-        return True
-    else:
-        print(f"Failed to send reply: {r.text}")
-        return False
+    return r.status_code == 200

@@ -100,3 +100,55 @@ def generate_draft_from_thread(conversation_thread):
     except Exception as e:
         print(f"Error in Gemini draft generation: {e}")
         return None
+    
+    
+    # Add this new function to the end of gemini_service.py
+    
+    # In gemini_service.py
+
+def find_event_in_email(email):
+    """A specialized function that ONLY looks for time-related text for an event."""
+    prompt = f"""
+    Your single task is to analyze an email to find a schedulable event and extract the exact text describing its time.
+    - An event is a 'meeting' or a 'deadline'.
+    - If an event is found, extract its details. The 'time_expression' should be the exact phrase from the email, like "next Tuesday at 3pm" or "on August 24th".
+    - If no event is found, the 'event_details' field MUST be null.
+
+    INPUT:
+    Subject: {email['subject']}
+    Body: {email['body']}
+    """
+    data = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "object",
+                "properties": {
+                    "event_details": {
+                        "type": "object",
+                        "nullable": True,
+                        "properties": {
+                            "type": {"type": "string", "enum": ["meeting", "deadline"]},
+                            "summary": {"type": "string"},
+                            "time_expression": {"type": "string"}, # MODIFIED
+                            "description": {"type": "string"}
+                        },
+                        "required": ["type", "summary", "time_expression"]
+                    }
+                }, "required": ["event_details"]
+            }
+        }
+    }
+    # ... (The rest of the function for the API call is the same)
+    headers = {"Content-Type": "application/json"}
+    params = {"key": GEMINI_API_KEY}
+    try:
+        response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data)
+        response.raise_for_status()
+        candidates = response.json().get("candidates", [])
+        if not candidates: return None
+        return json.loads(candidates[0]["content"]["parts"][0]["text"])
+    except Exception as e:
+        print(f"Error in Gemini event finding: {e}")
+        return None
