@@ -1,0 +1,74 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 class="h2 mb-0">Smart Calendar</h1>
+    <p class="text-muted">Email-to-calendar conversion with conflict detection</p>
+  </div>
+  <div>
+    <button class="btn btn-secondary">Today</button>
+    <a href="/add_event" class="btn btn-primary">+ New Event</a>
+  </div>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-9">
+    
+    {% if latest_suggestion %}
+    <div class="alert alert-custom-success d-flex align-items-center" role="alert">
+      <i class="bi bi-check-circle-fill fs-4 me-3"></i>
+      <div>
+        <h5 class="alert-heading">Meeting Request Detected</h5>
+        AI found a meeting request in the email: "{{ latest_suggestion.email_subject }}"
+        <div class="mt-2">
+            <a href="#" class="btn btn-sm btn-light">Create Calendar Event</a>
+            <a href="#" class="btn btn-sm btn-outline-secondary">Dismiss</a>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+    
+    <div class="card bg-dark border-secondary">
+      <div class="card-body">
+        <div id='calendar'></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-3">
+    <h5>Upcoming Events</h5>
+    <div class="list-group">
+      {% for event in upcoming_events_list %}
+        <div class="list-group-item list-group-item-action bg-dark text-white border-secondary mb-2 rounded">
+          <div class="d-flex w-100 justify-content-between">
+            <h6 class="mb-1">{{ event.summary }}</h6>
+          </div>
+          <p class="mb-1 small"><i class="bi bi-clock me-2"></i>{{ event.start_time }}</p>
+          <small class="text-muted"><i class="bi bi-people me-2"></i>{{ event.attendees }} participants</small>
+        </div>
+      {% else %}
+        <p class="text-muted small">No upcoming events found.</p>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<script>
+  document.addEventListener('DOMContentLoaded', function() {
+    var calendarEl = document.getElementById('calendar');
+    var calendar = new FullCalendar.Calendar(calendarEl, {
+      initialView: 'dayGridMonth',
+      themeSystem: 'bootstrap5',
+      headerToolbar: {
+        left: 'prev,next today',
+        center: 'title',
+        right: 'dayGridMonth,timeGridWeek,listWeek'
+      },
+      // Load the event data from our Flask backend
+      events: {{ calendar_events_json | safe }}
+    });
+    calendar.render();
+  });
+</script>
+{% endblock %}

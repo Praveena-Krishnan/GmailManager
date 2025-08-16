@@ -23,7 +23,7 @@ CREATE TABLE classifications (
 
 CREATE TABLE suggested_events (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    status TEXT NOT NULL DEFAULT 'pending',
+    status TEXT NOT NULL ,
     type TEXT NOT NULL, -- 'meeting' or 'deadline'
     summary TEXT NOT NULL,
     time_expression TEXT NOT NULL, -- MODIFIED: Replaced start_time and end_time

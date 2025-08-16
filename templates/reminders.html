@@ -1,0 +1,42 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+  <div>
+    <h1 class="h2 mb-0">Proactive Reminders</h1>
+    <p class="text-muted">AI-powered follow-up tracking and deadline management</p>
+  </div>
+  <a href="#" class="btn btn-primary">Mark All Read</a>
+</div>
+
+{% for item in reminders %}
+<div class="card mb-3 bg-dark {% if item.is_overdue %}border-danger{% else %}border-secondary{% endif %}">
+    <div class="card-body">
+        <div class="d-flex align-items-center">
+            <div class="flex-grow-1">
+                <div class="mb-2">
+                    <span class="badge {% if item.is_overdue %}bg-danger-subtle text-danger-emphasis{% else %}bg-primary-subtle text-primary-emphasis{% endif %}">High priority</span>
+                    
+                    {% if item.is_overdue %}
+                        <span class="badge bg-danger-subtle text-danger-emphasis">OVERDUE</span>
+                    {% endif %}
+                </div>
+                <h5 class="mb-1">{{ item.summary }}</h5>
+                <p class="mb-1 text-muted"><small>From email about "{{ database.get_classification_by_id(item.source_email_id).subject }}"</small></p>
+                <p class="mb-0 text-muted"><strong>Due:</strong> {{ item.due_date_formatted }}</p>
+            </div>
+            <div class="ms-3">
+                <a href="/complete_reminder/{{ item.id }}" class="btn btn-outline-success">Complete</a>
+            </div>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-success text-center">
+    <i class="bi bi-check2-circle fs-1"></i>
+    <h4 class="alert-heading mt-2">All Caught Up!</h4>
+    <p>You have no pending reminders.</p>
+</div>
+{% endfor %}
+
+{% endblock %}

@@ -83,3 +83,35 @@ def send_reply(access_token, to_address, subject, body, thread_id):
     payload = {'raw': raw_message, 'threadId': thread_id}
     r = requests.post(url, headers=headers, json=payload)
     return r.status_code == 200
+
+# Add this new function to gmail_service.py
+from datetime import datetime, timezone
+
+def get_upcoming_events(access_token, max_results=10):
+    """Fetches upcoming events from the user's primary calendar."""
+    url = f"https://www.googleapis.com/calendar/v3/calendars/primary/events"
+    
+    # Get events from now onwards, ordered by start time
+    now = datetime.now(timezone.utc).isoformat()
+    params = {
+        'maxResults': max_results,
+        'singleEvents': True,
+        'orderBy': 'startTime',
+        'timeMin': now
+    }
+    headers = {"Authorization": f"Bearer {access_token}"}
+    
+    res = requests.get(url, headers=headers, params=params)
+    if res.status_code != 200:
+        print(f"Error fetching calendar events: {res.text}")
+        return []
+
+    events = []
+    for item in res.json().get('items', []):
+        start = item.get('start', {}).get('dateTime', item.get('start', {}).get('date'))
+        events.append({
+            'summary': item.get('summary', 'No Title'),
+            'start_time': start,
+            'attendees': len(item.get('attendees', []))
+        })
+    return events

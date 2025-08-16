@@ -90,13 +90,16 @@ def get_classification_by_id(classification_id):
 
 # In database.py
 
-def add_suggestion(event_details, source_email_id):
+# In database.py
+
+def add_suggestion(event_details, source_email_id, status='pending'):
+    """Adds a new event suggestion to the database with a given status."""
     conn = get_db_connection()
     conn.execute(
-        # MODIFIED: Inserts the new time_expression field
-        'INSERT INTO suggested_events (type, summary, time_expression, description, source_email_id) VALUES (?, ?, ?, ?, ?)',
-        (event_details.get('type'), event_details.get('summary'),
-         event_details.get('time_expression'), event_details.get('description'), source_email_id)
+        'INSERT INTO suggested_events (type, summary, time_expression, description, source_email_id, status) VALUES (?, ?, ?, ?, ?, ?)',
+        (event_details.get('type', 'meeting'), event_details.get('summary'),
+         event_details.get('time_expression'), event_details.get('description'), 
+         source_email_id, status)
     )
     conn.commit()
     conn.close()
@@ -129,5 +132,36 @@ def update_suggestion_status(suggestion_id, status):
     """Updates the status of a suggestion (e.g., to 'accepted' or 'declined')."""
     conn = get_db_connection()
     conn.execute('UPDATE suggested_events SET status = ? WHERE id = ?', (status, suggestion_id))
+    conn.commit()
+    conn.close()
+    
+def get_pending_suggestions():
+    conn = get_db_connection()
+    suggestions = conn.execute("""
+        SELECT s.id, s.summary, s.time_expression, c.subject as email_subject
+        FROM suggested_events s
+        JOIN classifications c ON s.source_email_id = c.id
+        WHERE s.status = 'pending' ORDER BY s.id DESC
+    """).fetchall()
+    conn.close()
+    return suggestions
+
+
+
+def get_reminders(status='active'):
+    """Retrieves all reminders with a given status."""
+    conn = get_db_connection()
+    reminders = conn.execute(
+        "SELECT * FROM reminders WHERE status = ? ORDER BY due_date ASC", (status,)
+    ).fetchall()
+    conn.close()
+    return reminders
+
+def update_reminder_status(reminder_id, status):
+    """Updates the status of a reminder (e.g., to 'completed')."""
+    conn = get_db_connection()
+    conn.execute(
+        'UPDATE reminders SET status = ? WHERE id = ?', (status, reminder_id)
+    )
     conn.commit()
     conn.close()

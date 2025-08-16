@@ -11,6 +11,7 @@ import gemini_service
 from dateutil.parser import parse
 from datetime import timedelta, timezone
 import json
+from datetime import datetime
 
 load_dotenv()
 
@@ -109,6 +110,8 @@ def send_reply(classification_id):
     else: return "Failed to send email.", 500
 
 # --- Background Webhook Route ---
+# In app.py
+
 @app.route("/pubsub/push", methods=["POST"])
 def pubsub_push():
     if PUBSUB_VERIFICATION_TOKEN and request.args.get("token") != PUBSUB_VERIFICATION_TOKEN: return "Unauthorized", 401
@@ -157,7 +160,7 @@ def pubsub_push():
                     response_draft = new_draft
         classification_result['response_draft'] = response_draft
 
-        # CORRECTED LOGIC: Save the main classification FIRST to get its ID
+        # Save the main classification FIRST to get its ID
         try:
             classification_id = database.add_classification(mid, classification_result)
         except sqlite3.IntegrityError:
@@ -167,17 +170,28 @@ def pubsub_push():
 
         # AI Call 3 (Conditional): Find Events
         if classification_result.get('category') in ['Meeting', 'To Respond', 'Urgent']:
+            print(f"Checking for events in email {mid}...")
             event_result = gemini_service.find_event_in_email(email_content)
             if event_result and event_result.get('event_details'):
-                print(f"Found a potential event: {event_result['event_details']['summary']}")
-                database.add_suggestion(event_result['event_details'], classification_id)
+                event_details = event_result['event_details']
+                event_type = event_details.get('type')
+                if event_type == 'meeting':
+                    print(f"Found a potential meeting: {event_details.get('summary')}")
+                    database.add_suggestion(event_details, classification_id)
+                elif event_type == 'deadline':
+                    print(f"Found a potential deadline: {event_details.get('summary')}")
+                    # CORRECTED: Use 'time_expression' which is what the AI provides
+                    database.add_reminder(
+                        summary=event_details.get('summary'),
+                        due_date=event_details.get('time_expression'),
+                        source_email_id=classification_id
+                    )
         
         gmail_service.mark_as_read(access_token, mid)
         return "OK", 200
     except Exception as e:
         print(f"Push handler error: {e}")
         return "OK", 200
-    
 # In app.py
 
 @app.route("/check_conflicts/<int:suggestion_id>")
@@ -234,12 +248,6 @@ def check_conflicts(suggestion_id):
         "conflicts": conflicts
     }
 
-# In app.py
-
-# In app.py
-
-# In app.py
-
 @app.route("/schedule_event/<int:suggestion_id>")
 def schedule_event(suggestion_id):
     tokens = session.get("tokens")
@@ -291,6 +299,110 @@ def schedule_event(suggestion_id):
     else:
         # We will now see the detailed error from Google here
         return f"Error creating event. See terminal log for details.", 500
+    
+
+@app.route("/calendar")
+def calendar_view():
+    tokens = session.get("tokens")
+    if not tokens: return redirect("/")
+    
+    upcoming_events = gmail_service.get_upcoming_events(tokens.get('access_token'))
+    
+    # NEW: Format events for FullCalendar
+    calendar_events = []
+    for event in upcoming_events:
+        calendar_events.append({
+            "title": event['summary'],
+            "start": event['start_time']
+        })
+
+    # Convert to JSON to safely pass to the template's JavaScript
+    calendar_events_json = json.dumps(calendar_events)
+    
+    pending_suggestions = database.get_pending_suggestions()
+    latest_suggestion = pending_suggestions[0] if pending_suggestions else None
+    
+    return render_template(
+        "calendar.html",
+        upcoming_events_list=upcoming_events, # For the sidebar
+        latest_suggestion=latest_suggestion,
+        calendar_events_json=calendar_events_json # For the main calendar grid
+    )
+    
+
+
+@app.route("/manual_schedule/<int:classification_id>", methods=["POST"])
+def manual_schedule(classification_id):
+    tokens = session.get("tokens")
+    if not tokens: return redirect("/")
+
+    summary = request.form.get("summary")
+    start_time_str = request.form.get("start_time")
+    
+    try:
+        start_time = datetime.fromisoformat(start_time_str)
+        end_time = start_time + timedelta(hours=1)
+    except (ValueError, TypeError):
+        return "Invalid date format submitted.", 400
+
+    classification = database.get_classification_by_id(classification_id)
+    sender_email = classification['sender'] if classification else ''
+    
+    event = {
+        'summary': summary,
+        'description': f"Event manually created by Zentra from email: {classification['subject']}",
+        'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
+        'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
+        'attendees': [{'email': sender_email}]
+    }
+
+    calendar_url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+    res = requests.post(
+        calendar_url,
+        headers={"Authorization": f"Bearer {tokens.get('access_token')}"},
+        json=event
+    )
+
+    if res.status_code in [200, 201]:
+        # NEW: Create a record in our local database
+        event_details = {
+            "type": "meeting",
+            "summary": summary,
+            "time_expression": start_time.strftime("%B %d, %Y at %I:%M %p")
+        }
+        database.add_suggestion(event_details, classification_id, status='accepted')
+        
+        return redirect(f"/classification/{classification_id}")
+    else:
+        return f"Error creating event: {res.text}", 500
+    
+
+@app.route("/reminders")
+def reminders_view():
+    reminders_raw = database.get_reminders(status='active')
+    
+    # Process reminders to check if they are overdue
+    reminders = []
+    now = datetime.now()
+    for r in reminders_raw:
+        reminder = dict(r) # Convert the database row to a mutable dictionary
+        due_date = datetime.fromisoformat(r['due_date'])
+        reminder['due_date_formatted'] = due_date.strftime("%b %d, %Y at %I:%M %p")
+        
+        if due_date < now:
+            reminder['is_overdue'] = True
+        else:
+            reminder['is_overdue'] = False
+        reminders.append(reminder)
+
+    return render_template("reminders.html", reminders=reminders)
+
+@app.route("/complete_reminder/<int:reminder_id>")
+def complete_reminder(reminder_id):
+    # Update the status in the database
+    database.update_reminder_status(reminder_id, 'completed')
+    # Redirect back to the reminders page
+    return redirect("/reminders")
     
 if __name__ == "__main__":
     app.run(debug=False, host='0.0.0.0', port=5000)
