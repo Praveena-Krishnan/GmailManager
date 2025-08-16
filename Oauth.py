@@ -6,7 +6,7 @@ import os
 from dotenv import load_dotenv
 import time
 import sqlite3
-
+import re
 import database
 import gmail_service
 import gemini_service
@@ -69,43 +69,29 @@ def callback():
 # --- Application Routes ---
 # DELETED: The old /home route is no longer needed, /recent_classified is the new home.
 
-# In app.py
 
 @app.route("/recent_classified")
 def recent_classified_view():
-    # Get the category from the URL, e.g., 'Urgent'. Defaults to None if not present.
     category_filter = request.args.get('category', None)
-
-    # Fetch the list of emails, now with the optional filter
-    classifications = database.get_recent_classifications(category_filter=category_filter)
     
-    # The category counts will always show the total for all emails
+    # Fetch all the necessary data from the database
+    classifications = database.get_recent_classifications(category_filter=category_filter)
     category_counts = database.get_category_counts()
     
     category_colors = {
-        "Urgent": "danger",
-        "To Respond": "warning",
-        "Meeting": "primary",
-        "FYI": "info",
-        "Uncategorized": "secondary"
+        "Urgent": "danger", "To Respond": "warning", "Meeting": "primary",
+        "FYI": "info", "Uncategorized": "secondary"
     }
 
-    # Pass all the data to the template
+    # Pass the raw data directly to the template
     return render_template(
         "history.html",
         classifications=classifications,
-        category_colors=category_colors,
-        counts=category_counts
+        counts=category_counts,
+        category_colors=category_colors
     )
-# ... (Your other routes like /list_events and pubsub_push remain the same for now) ...
-# We will create a new history.html and update this function in the next step.
-# All other functions (gemini_service, gmail_service, database) remain unchanged.
-
-
-# --- Background Webhook Route (No changes needed here yet) ---
-# In app.py, replace the pubsub_push function
-
-
+    
+    
 
 @app.route("/pubsub/push", methods=["POST"])
 def pubsub_push():
@@ -179,6 +165,61 @@ def pubsub_push():
     except Exception as e:
         print(f"Push handler error: {e}")
         return "OK", 200
+    
+
+
+
+# Replace the existing detail view function in app.py
+@app.route("/classification/<int:classification_id>")
+def classification_detail_view(classification_id):
+    classification = database.get_classification_by_id(classification_id)
+    if not classification:
+        return "Classification not found", 404
+
+    # Logic to highlight important terms in the summary
+    summary = classification['summary']
+    if classification['important_terms']:
+        # Get a list of terms, stripping any extra whitespace
+        terms = [term.strip() for term in classification['important_terms'].split(',')]
+        for term in terms:
+            if term: # Ensure term is not an empty string
+                # Use regex for a case-insensitive replacement
+                summary = re.sub(f'({re.escape(term)})', r'<span class="highlight">\1</span>', summary, flags=re.IGNORECASE)
+
+    return render_template("detail.html", classification=classification, highlighted_summary=summary)
+
+
+@app.route("/send_reply/<int:classification_id>", methods=["POST"])
+def send_reply(classification_id):
+    tokens = session.get("tokens")
+    if not tokens: return redirect("/")
+    
+    classification = database.get_classification_by_id(classification_id)
+    if not classification:
+        return "Error: Original message not found.", 404
+
+    reply_body = request.form.get("reply_body")
+    
+    # We need the original thread ID to send a proper reply
+    # This requires fetching the original message from Gmail again
+    original_message = gmail_service.get_full_message(tokens.get("access_token"), classification['gmail_message_id'])
+    if not original_message:
+        return "Error: Could not fetch original thread info from Gmail.", 500
+
+    thread_id = original_message.get('threadId')
+    
+    # The 'To' address is the original sender
+    to_address = classification['sender']
+    # The subject of a reply is typically "Re: [Original Subject]"
+    subject = f"Re: {classification['subject']}"
+
+    success = gmail_service.send_reply(tokens.get("access_token"), to_address, subject, reply_body, thread_id)
+
+    if success:
+        # After sending, redirect back to the inbox
+        return redirect("/recent_classified")
+    else:
+        return "Failed to send email.", 500
     
 if __name__ == "__main__":
     app.run(debug=False, host='0.0.0.0', port=5000)

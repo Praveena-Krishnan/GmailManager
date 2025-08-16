@@ -20,21 +20,29 @@
 {% for item in classifications %}
 <a href="/classification/{{ item.id }}" class="text-decoration-none text-white">
   <div class="card mb-3 bg-dark border-secondary">
-      <div class="card-body">
-          <div class="d-flex w-100 justify-content-between">
-              <div class="flex-grow-1">
-                  <h5 class="mb-1">{{ item.sender }} <span class="badge bg-{{ category_colors.get(item.category, 'secondary') }}">{{ item.category }}</span></h5>
-                  <p class="mb-1"><strong>{{ item.subject }}</strong></p>
-                  
-                  <p class="mb-0 text-muted fst-italic">
-                      <small>Reason: {{ item.reason }} (Confidence: {{ "%.2f"|format(item.confidence|float) }})</small>
-                  </p>
-              </div>
-              <div class="text-end">
-                  <small class="text-muted">{{ item.created_at[:10] }}</small>
-              </div>
+    <div class="card-body">
+      <div class="d-flex w-100 justify-content-between">
+        <div class="flex-grow-1">
+          <h5 class="mb-1">{{ item.sender }} <span class="badge bg-{{ category_colors.get(item.category, 'secondary') }}">{{ item.category }}</span></h5>
+          <p class="mb-1"><strong>{{ item.subject }}</strong></p>
+          <p class="mb-0 text-muted fst-italic">
+            <small>{{ item.category_reason }} (Confidence: {{ "%.2f"|format(item.confidence|float) }})</small>
+          </p>
+          <div class="mt-2">
+            {% if item.important_terms %}
+              {% for term in item.important_terms.split(',')[:3] %}
+                {% if term.strip() %}
+                  <span class="badge bg-secondary me-1">{{ term.strip() }}</span>
+                {% endif %}
+              {% endfor %}
+            {% endif %}
           </div>
+        </div>
+        <div class="text-end">
+          <small class="text-muted">{{ item.created_at[:10] }}</small>
+        </div>
       </div>
+    </div>
   </div>
 </a>
 {% else %}

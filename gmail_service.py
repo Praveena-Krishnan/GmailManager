@@ -3,6 +3,7 @@
 import requests
 import base64
 
+
 GMAIL_API_BASE_URL = "https://gmail.googleapis.com/gmail/v1/users/me"
 
 def get_latest_unread_message(access_token):
@@ -88,3 +89,33 @@ def get_full_thread(access_token, thread_id):
         return None
     
     return res.json()
+
+# Add this function to gmail_service.py
+
+import base64
+from email.mime.text import MIMEText
+
+def send_reply(access_token, to_address, subject, body, thread_id):
+    """Sends an email reply."""
+    url = f"{GMAIL_API_BASE_URL}/messages/send"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    
+    message = MIMEText(body)
+    message['to'] = to_address
+    message['subject'] = subject
+    
+    # Create the raw message body
+    raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode()
+    
+    payload = {
+        'raw': raw_message,
+        'threadId': thread_id # This makes sure it's a reply in the correct thread
+    }
+    
+    r = requests.post(url, headers=headers, json=payload)
+    if r.status_code == 200:
+        print("Reply sent successfully!")
+        return True
+    else:
+        print(f"Failed to send reply: {r.text}")
+        return False

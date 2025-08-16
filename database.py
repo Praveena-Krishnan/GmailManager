@@ -16,16 +16,20 @@ def init_db():
     print("Database has been initialized.")
 
 # MODIFIED: This function now accepts the message ID
+# In database.py
+
 def add_classification(message_id, result):
     conn = get_db_connection()
     important_terms_str = ', '.join(result.get('important_terms', []))
     cursor = conn.cursor()
     cursor.execute(
         '''INSERT INTO classifications
-           (gmail_message_id, subject, sender, body, category, confidence, reason, summary, important_terms, response_draft)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+           (gmail_message_id, subject, sender, body, category, confidence, priority_analysis, category_reason, summary, important_terms, response_draft)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
         (message_id, result.get('subject', 'No Subject'), result.get('sender', 'Unknown Sender'), result.get('body', ''),
-         result.get('category', 'Uncategorized'), result.get('confidence', 0.0), result.get('reason', 'N/A'),
+         result.get('category', 'Uncategorized'), result.get('confidence', 0.0),
+         result.get('priority_analysis', 'N/A'),
+         result.get('category_reason', 'N/A'),
          result.get('summary', 'N/A'), important_terms_str, result.get('response_draft', 'N/A'))
     )
     last_id = cursor.lastrowid
@@ -54,3 +58,14 @@ def get_category_counts():
     return {row['category']: row['count'] for row in counts}
 
 # DELETED: The check_if_exists function is no longer needed.
+
+# Add this function to database.py
+
+def get_classification_by_id(classification_id):
+    """Retrieves a single classification by its database ID."""
+    conn = get_db_connection()
+    classification = conn.execute(
+        'SELECT * FROM classifications WHERE id = ?', (classification_id,)
+    ).fetchone()
+    conn.close()
+    return classification

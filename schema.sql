@@ -11,7 +11,8 @@ CREATE TABLE classifications (
     body TEXT,
     category TEXT,
     confidence REAL,
-    reason TEXT,
+    priority_analysis TEXT,
+    category_reason TEXT,
     summary TEXT,
     important_terms TEXT,
     response_draft TEXT

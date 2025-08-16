@@ -9,18 +9,19 @@ load_dotenv()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
 
+# In gemini_service.py
+
 def process_single_email_with_gemini(email):
     """Sends email content to Gemini for classification and returns a structured dict."""
     prompt = f"""
-    You are an email processing assistant. Your task is to analyze an email and return a structured JSON object.
+    You are an expert email analysis assistant. Your task is to analyze an email and return a structured JSON object.
 
     ---
     RULES:
-    - category: Must be one of: Urgent, To Respond, FYI, Meeting. If a response is needed, the category must be "To Respond".
-    - confidence: A score from 0.0 to 1.0 based on your certainty.
-        - Use a HIGH score (0.9-1.0) for explicit emails (e.g., "this is urgent", "please reply").
-        - Use a MEDIUM score (0.7-0.89) for implicit requests or suggestions.
-    - reason: A brief justification for the category choice, referencing specific phrases or intent from the email. For example, "The email asks a direct question" or "The subject contains 'urgent'."
+    - priority_analysis: Explain WHY the email is a priority. Mention key factors like "deadline approaching", "request from manager", "external client inquiry", or "from your college". If not a priority, state "Standard priority".
+    - category: Must be one of: Urgent, To Respond, FYI, Meeting.
+    - category_reason: Explain the evidence for the category choice. E.g., "The email asks a direct question" or "Contains scheduling information".
+    - confidence: A score from 0.0 to 1.0 based on your certainty of the categorization.
     - summary: A concise, one-sentence, neutral overview of the email's content.
     ---
 
@@ -40,12 +41,19 @@ def process_single_email_with_gemini(email):
                 "type": "object",
                 "properties": {
                     "subject": {"type": "string"}, "sender": {"type": "string"}, "body": {"type": "string"},
-                    "category": {"type": "string"}, "confidence": {"type": "number"}, "reason": {"type": "string"},
+                    "category": {"type": "string"}, "confidence": {"type": "number"},
+                    "priority_analysis": {"type": "string"},
+                    "category_reason": {"type": "string"},
                     "summary": {"type": "string"}, "important_terms": {"type": "array", "items": {"type": "string"}},
                     "response_draft": {"type": "string"}
+                    # The old 'reason' field is correctly removed from here.
                 },
-                # This 'required' list is the key to fixing the problem.
-                "required": ["subject", "sender", "category", "confidence", "reason", "summary", "important_terms", "response_draft"]
+                # CORRECTED: The required list now matches all the fields we need.
+                "required": [
+                    "subject", "sender", "body", "category", "confidence",
+                    "priority_analysis", "category_reason", "summary",
+                    "important_terms", "response_draft"
+                ]
             }
         }
     }

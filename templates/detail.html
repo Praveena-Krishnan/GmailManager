@@ -1,0 +1,83 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<style>
+  .highlight {
+        background-color: #f0ad4e; /* A lighter, more muted yellow/orange */
+        color: #fff;             /* White text for better contrast */
+        padding: 0.1em 0.4em;
+        border-radius: 0.2rem;
+        font-weight: 500;
+      }
+</style>
+
+<div class="mb-4 d-flex justify-content-between align-items-center">
+  <div>
+    <h1 class="h2 mb-0">{{ classification.subject }}</h1>
+    <p class="text-muted">From: {{ classification.sender }}</p>
+  </div>
+  <a href="/recent_classified" class="btn btn-sm btn-outline-secondary">&larr; Back to Inbox</a>
+</div>
+
+<div class="row g-4">
+  <div class="col-md-8">
+    <div class="card bg-dark border-secondary h-100">
+      <div class="card-body">
+        
+        <h5 class="card-title">AI Summary</h5>
+        <p class="card-text fst-italic">
+          {{ highlighted_summary | safe }}
+        </p>
+        
+
+        <hr>
+
+        <h5 class="card-title mb-4">Original Message</h5>
+        <pre style="white-space: pre-wrap; font-family: inherit; font-size: 0.9rem;">{{ classification.body }}</pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-md-4">
+    <h4 class="mb-3">AI Insights</h4>
+
+    <div class="card bg-dark border-secondary mb-3">
+      <div class="card-body">
+        <h5 class="card-title">Priority Analysis</h5>
+        <p class="card-text small">{{ classification.priority_analysis }}</p>
+        <div class="progress" role="progressbar" style="height: 10px;">
+          <div class="progress-bar" style="width: {{ (classification.confidence|float) * 100 }}%"></div>
+        </div>
+        <div class="text-end small mt-1">Confidence: {{ "%.0f"|format((classification.confidence|float) * 100) }}%</div>
+      </div>
+    </div>
+
+    <div class="card bg-dark border-secondary mb-3">
+      <div class="card-body">
+        <h5 class="card-title">Categorization</h5>
+        <p class="card-text small">Labeled as <strong>{{ classification.category }}</strong> because: {{ classification.category_reason }}</p>
+      </div>
+    </div>
+
+    <div class="card bg-dark border-secondary">
+      <div class="card-body">
+        <h5 class="card-title">Suggested Actions</h5>
+        <div class="d-grid gap-2">
+          {% if classification.category == 'To Respond' %}
+          <button class="btn btn-primary" type="button" data-bs-toggle="collapse" data-bs-target="#collapseDraft" aria-expanded="false">
+            View/Edit AI Response
+          </button>
+          {% endif %}
+          <button class="btn btn-outline-secondary" type="button" disabled>Schedule Meeting (Coming Soon)</button>
+        </div>
+        <div class="collapse mt-3" id="collapseDraft">
+          <form action="/send_reply/{{ classification.id }}" method="post">
+            <textarea class="form-control bg-dark text-white" name="reply_body" rows="6">{{ classification.response_draft }}</textarea>
+            <button type="submit" class="btn btn-success mt-2 w-100">Send Reply</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
