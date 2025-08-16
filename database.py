@@ -37,19 +37,38 @@ def add_classification(message_id, result):
     return last_id
 
 # ... (get_recent_classifications and get_category_counts are unchanged) ...
+
+
 def get_recent_classifications(category_filter=None, limit=25):
+    """
+    Retrieves recent classifications and joins with suggested_events
+    to get the status of any associated event.
+    """
     conn = get_db_connection()
-    query = 'SELECT * FROM classifications'
+    
+    # MODIFIED: Using a LEFT JOIN to get the suggestion status
+    query = """
+        SELECT
+            c.id, c.subject, c.sender, c.category, c.confidence,
+            c.category_reason, c.important_terms, c.created_at,
+            s.status as suggestion_status
+        FROM
+            classifications c
+        LEFT JOIN
+            suggested_events s ON c.id = s.source_email_id
+    """
     params = []
+
     if category_filter:
-        query += ' WHERE category = ?'
+        query += ' WHERE c.category = ?'
         params.append(category_filter)
-    query += ' ORDER BY id DESC LIMIT ?'
+    
+    query += ' ORDER BY c.id DESC LIMIT ?'
     params.append(limit)
+
     classifications = conn.execute(query, tuple(params)).fetchall()
     conn.close()
     return classifications
-
 def get_category_counts():
     conn = get_db_connection()
     counts = conn.execute('SELECT category, COUNT(id) as count FROM classifications GROUP BY category').fetchall()
@@ -105,3 +124,10 @@ def get_suggestion(suggestion_id):
     ).fetchone()
     conn.close()
     return suggestion
+
+def update_suggestion_status(suggestion_id, status):
+    """Updates the status of a suggestion (e.g., to 'accepted' or 'declined')."""
+    conn = get_db_connection()
+    conn.execute('UPDATE suggested_events SET status = ? WHERE id = ?', (status, suggestion_id))
+    conn.commit()
+    conn.close()

@@ -106,13 +106,39 @@ def generate_draft_from_thread(conversation_thread):
     
     # In gemini_service.py
 
+# In gemini_service.py
+
+# In gemini_service.py
+
 def find_event_in_email(email):
-    """A specialized function that ONLY looks for time-related text for an event."""
+    """A specialized function that ONLY looks for schedulable events in an email."""
     prompt = f"""
     Your single task is to analyze an email to find a schedulable event and extract the exact text describing its time.
+
+    ---
+    RULES:
     - An event is a 'meeting' or a 'deadline'.
     - If an event is found, extract its details. The 'time_expression' should be the exact phrase from the email, like "next Tuesday at 3pm" or "on August 24th".
+    - If the email mentions a date but no specific time, assume a standard business time of 10:00 AM.
     - If no event is found, the 'event_details' field MUST be null.
+    ---
+    EXAMPLE:
+    INPUT:
+    Subject: Project Sync
+    Body: Hi team, let's sync up tomorrow, August 17th, at 2:30 PM to discuss the new designs.
+    OUTPUT JSON:
+    {{
+        "event_details": {{
+            "type": "meeting",
+            "summary": "Project Sync",
+            "time_expression": "August 17th, 2025 at 2:30 PM",
+            "description": "Discuss the new designs."
+        }}
+    }}
+    ---
+
+    ACTUAL TASK:
+    Analyze the following email and generate the JSON output.
 
     INPUT:
     Subject: {email['subject']}
@@ -131,7 +157,7 @@ def find_event_in_email(email):
                         "properties": {
                             "type": {"type": "string", "enum": ["meeting", "deadline"]},
                             "summary": {"type": "string"},
-                            "time_expression": {"type": "string"}, # MODIFIED
+                            "time_expression": {"type": "string"},
                             "description": {"type": "string"}
                         },
                         "required": ["type", "summary", "time_expression"]

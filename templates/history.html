@@ -23,7 +23,11 @@
     <div class="card-body">
       <div class="d-flex w-100 justify-content-between">
         <div class="flex-grow-1">
-          <h5 class="mb-1">{{ item.sender }} <span class="badge bg-{{ category_colors.get(item.category, 'secondary') }}">{{ item.category }}</span></h5>
+          <h5 class="mb-1">{{ item.sender }} <span class="badge bg-{{ category_colors.get(item.category, 'secondary') }}">{{ item.category }}</span>
+            {% if item.suggestion_status == 'accepted' %}
+              <span class="badge bg-success">Event Scheduled</span>
+            {% endif %}
+          </h5>
           <p class="mb-1"><strong>{{ item.subject }}</strong></p>
           <p class="mb-0 text-muted fst-italic">
             <small>{{ item.category_reason }} (Confidence: {{ "%.2f"|format(item.confidence|float) }})</small>

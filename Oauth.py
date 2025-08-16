@@ -10,6 +10,7 @@ import gmail_service
 import gemini_service
 from dateutil.parser import parse
 from datetime import timedelta, timezone
+import json
 
 load_dotenv()
 
@@ -233,35 +234,63 @@ def check_conflicts(suggestion_id):
         "conflicts": conflicts
     }
 
-@app.route("/schedule_event/<int:classification_id>")
-def schedule_event(classification_id):
+# In app.py
+
+# In app.py
+
+# In app.py
+
+@app.route("/schedule_event/<int:suggestion_id>")
+def schedule_event(suggestion_id):
     tokens = session.get("tokens")
     if not tokens: return redirect("/")
 
-    classification = database.get_classification_by_id(classification_id)
-    if not classification: return "Error: Suggestion not found.", 404
+    suggestion = database.get_suggestion(suggestion_id)
+    if not suggestion: return "Error: Suggestion not found.", 404
 
-    # This logic would be the same as in the conflict check
-    time_expression = "August 24th, 2025 at 2pm"
-    start_time = parse(time_expression)
-    end_time = start_time + timedelta(hours=1)
+    try:
+        start_time = parse(suggestion['time_expression'])
+        end_time = start_time + timedelta(hours=1)
+    except Exception as e:
+        return f"Error: Could not parse the time '{suggestion['time_expression']}'. Details: {e}", 500
     
+    classification = database.get_classification_by_id(suggestion['source_email_id'])
+    sender_email = classification['sender'] if classification else ''
+
     event = {
-        'summary': classification['summary'],
+        'summary': suggestion['summary'],
         'description': f"Event created by Zentra based on email: {classification['subject']}",
         'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
         'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
+        'attendees': [{'email': sender_email}]
     }
     
+    # --- NEW: DETAILED LOGGING ---
+    print("\n--- SCHEDULING EVENT ---")
+    print(f"Original Time Expression: {suggestion['time_expression']}")
+    print(f"Parsed Start Time (Local): {start_time}")
+    print("Sending the following payload to Google Calendar:")
+    print(json.dumps(event, indent=2))
+    # --- END OF LOGGING ---
+
     calendar_url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-    res = requests.post(calendar_url, headers={"Authorization": f"Bearer {tokens.get('access_token')}"}, json=event)
+    headers = {"Authorization": f"Bearer {tokens.get('access_token')}"}
+    
+    res = requests.post(calendar_url, headers=headers, json=event)
+
+    # --- NEW: LOGGING THE RESPONSE ---
+    print("\n--- GOOGLE CALENDAR RESPONSE ---")
+    print(f"Status Code: {res.status_code}")
+    print(f"Response Body: {res.text}")
+    print("---------------------------\n")
+    # --- END OF LOGGING ---
 
     if res.status_code in [200, 201]:
-        # In a real app, you would also update the suggestion status in your DB
-        # database.update_suggestion_status(suggestion_id, 'accepted')
+        database.update_suggestion_status(suggestion_id, 'accepted')
         return redirect("/recent_classified")
     else:
-        return f"Error creating event: {res.text}", 500
-
+        # We will now see the detailed error from Google here
+        return f"Error creating event. See terminal log for details.", 500
+    
 if __name__ == "__main__":
     app.run(debug=False, host='0.0.0.0', port=5000)
