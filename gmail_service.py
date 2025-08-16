@@ -73,3 +73,18 @@ def refresh_access_token(client_id, client_secret, refresh_token):
     if r.status_code == 200:
         return r.json().get("access_token")
     return None
+
+# Add this new function to gmail_service.py
+
+def get_full_thread(access_token, thread_id):
+    """Fetches all messages in a given thread."""
+    url = f"{GMAIL_API_BASE_URL}/threads/{thread_id}"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    params = {"format": "full"} # Get full details for each message
+
+    res = requests.get(url, headers=headers, params=params)
+    if res.status_code != 200:
+        print(f"Error getting thread {thread_id}: {res.text}")
+        return None
+    
+    return res.json()

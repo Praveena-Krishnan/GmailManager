@@ -105,6 +105,8 @@ def recent_classified_view():
 # --- Background Webhook Route (No changes needed here yet) ---
 # In app.py, replace the pubsub_push function
 
+
+
 @app.route("/pubsub/push", methods=["POST"])
 def pubsub_push():
     if PUBSUB_VERIFICATION_TOKEN and request.args.get("token") != PUBSUB_VERIFICATION_TOKEN: return "Unauthorized", 401
@@ -114,26 +116,20 @@ def pubsub_push():
     
     try:
         global last_tokens
-        access_token = last_tokens.get("access_token")
-
-        # CORRECTED LOGIC: If the access token is missing, call it from the gmail_service module
+        access_token = last_tokens.get("access_token") or gmail_service.refresh_access_token(
+            CLIENT_ID, CLIENT_SECRET, last_tokens.get("refresh_token")
+        )
         if not access_token:
-            print("Access token expired or missing, attempting refresh...")
-            access_token = gmail_service.refresh_access_token(
-                CLIENT_ID,
-                CLIENT_SECRET,
-                last_tokens.get("refresh_token")
-            )
-            if not access_token:
-                print("Failed to refresh token.")
-                return "No valid token; refresh failed", 200
-            last_tokens['access_token'] = access_token
+            print("Failed to get a valid access token.")
+            return "No valid token", 200
+        last_tokens['access_token'] = access_token
 
         message = gmail_service.get_latest_unread_message(access_token)
         if not message:
-            return "OK", 200 # No unread messages found
+            return "OK", 200
         
         mid = message.get('id')
+        thread_id = message.get('threadId')
         
         email_timestamp = int(message.get('internalDate', 0))
         if email_timestamp < STARTUP_TIMESTAMP:
@@ -143,24 +139,41 @@ def pubsub_push():
             
         subject = next((h["value"] for h in message["payload"]["headers"] if h["name"].lower() == "subject"), "")
         sender = next((h["value"] for h in message["payload"]["headers"] if h["name"].lower() == "from"), "")
-        
-        if database.check_if_exists(subject, sender):
-            print(f"Duplicate notification for '{subject}' ignored by local DB check.")
-            gmail_service.mark_as_read(access_token, mid)
-            return "OK", 200
-
         body = gmail_service.get_email_body(message["payload"])
+
+        # STEP 1: Perform a quick classification on the latest email ONLY.
         result = gemini_service.process_single_email_with_gemini({"subject": subject, "sender": sender, "body": body})
 
-        if result:
-            try:
-                database.add_classification(mid, result)
-                gmail_service.mark_as_read(access_token, mid)
-            except sqlite3.IntegrityError:
-                print(f"Duplicate message (ID: {mid}) ignored by database UNIQUE constraint.")
-                gmail_service.mark_as_read(access_token, mid)
-        else:
-            print(f"Classification failed for message {mid}. It will remain unread and be retried.")
+        if not result:
+             print(f"Initial classification failed for message {mid}. Marking as read to avoid loops on bad emails.")
+             gmail_service.mark_as_read(access_token, mid)
+             return "OK", 200
+
+        # STEP 2: If the category is "To Respond", get the full thread and generate a better draft.
+        if result.get('category') == 'To Respond':
+            print(f"Category is 'To Respond'. Fetching full thread {thread_id} for a better draft...")
+            thread_data = gmail_service.get_full_thread(access_token, thread_id)
+            if thread_data and thread_data.get('messages'):
+                conversation_str = ""
+                for i, msg_in_thread in enumerate(thread_data['messages']):
+                    headers = msg_in_thread['payload']['headers']
+                    msg_sender = next((h['value'] for h in headers if h['name'].lower() == 'from'), '')
+                    msg_body = gmail_service.get_email_body(msg_in_thread['payload'])
+                    conversation_str += f"--- Email {i+1} From: {msg_sender} ---\n{msg_body}\n\n"
+                
+                new_draft = gemini_service.generate_draft_from_thread(conversation_str)
+                if new_draft:
+                    print("Successfully generated a new draft based on the full thread.")
+                    result['response_draft'] = new_draft
+        
+        # Now, save the final result using the robust de-duplication method
+        try:
+            database.add_classification(mid, result)
+            gmail_service.mark_as_read(access_token, mid)
+        except sqlite3.IntegrityError:
+            # This error happens if the UNIQUE constraint fails, meaning it's a duplicate.
+            print(f"Duplicate message (ID: {mid}) ignored by database UNIQUE constraint.")
+            gmail_service.mark_as_read(access_token, mid)
         
         return "OK", 200
     except Exception as e:
