@@ -2,6 +2,8 @@ import requests
 import base64
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from dateutil.parser import parse
+from datetime import timedelta
 
 GMAIL_API_BASE_URL = "https://gmail.googleapis.com/gmail/v1/users/me"
 
@@ -115,3 +117,68 @@ def get_upcoming_events(access_token, max_results=10):
             'attendees': len(item.get('attendees', []))
         })
     return events
+
+
+def create_calendar_event(access_token, event_details):
+    """Creates a new event on the user's primary calendar."""
+    try:
+        start_time = parse(event_details['start_time'])
+        end_time = parse(event_details['end_time'])
+    except Exception as e:
+        print(f"Could not parse event times: {e}")
+        return False
+        
+    event = {
+        'summary': event_details.get('summary'),
+        'description': event_details.get('description'),
+        'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
+        'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
+    }
+    
+    url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    res = requests.post(url, headers=headers, json=event)
+
+    if res.status_code in [200, 201]:
+        print(f"Successfully created event: {event.get('summary')}")
+        return True
+    else:
+        print(f"Error creating event: {res.text}")
+        return False
+    
+# Add these two functions to gmail_service.py
+
+def find_calendar_events(access_token, query_text):
+    """Searches for calendar events based on a text query."""
+    url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
+    params = {'q': query_text, 'maxResults': 5}
+    headers = {"Authorization": f"Bearer {access_token}"}
+    res = requests.get(url, headers=headers, params=params)
+    if res.status_code == 200:
+        return res.json().get('items', [])
+    else:
+        print(f"Error finding events: {res.text}")
+        return []
+
+def delete_calendar_event(access_token, event_id):
+    """Deletes a specific calendar event by its ID."""
+    url = f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    res = requests.delete(url, headers=headers)
+    return res.status_code == 204 # 204 No Content is the success status for delete
+
+# Add this new function to gmail_service.py
+
+def modify_calendar_event(access_token, event_id, updates):
+    """Modifies an existing calendar event with the provided updates."""
+    url = f"https://www.googleapis.com/calendar/v3/calendars/primary/events/{event_id}"
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+    
+    res = requests.patch(url, headers=headers, json=updates)
+    
+    if res.status_code == 200:
+        print(f"Successfully modified event {event_id}")
+        return res.json()
+    else:
+        print(f"Error modifying event: {res.text}")
+        return None

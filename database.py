@@ -146,6 +146,15 @@ def get_pending_suggestions():
     conn.close()
     return suggestions
 
+def add_reminder(summary, due_date, source_email_id):
+    """Adds a new reminder to the database."""
+    conn = get_db_connection()
+    conn.execute(
+        'INSERT INTO reminders (summary, due_date, source_email_id) VALUES (?, ?, ?)',
+        (summary, due_date, source_email_id)
+    )
+    conn.commit()
+    conn.close()
 
 
 def get_reminders(status='active'):

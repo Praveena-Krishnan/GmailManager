@@ -377,23 +377,32 @@ def manual_schedule(classification_id):
         return f"Error creating event: {res.text}", 500
     
 
+# In app.py
+
+# In app.py
+
 @app.route("/reminders")
 def reminders_view():
     reminders_raw = database.get_reminders(status='active')
     
-    # Process reminders to check if they are overdue
     reminders = []
     now = datetime.now()
+
     for r in reminders_raw:
-        reminder = dict(r) # Convert the database row to a mutable dictionary
-        due_date = datetime.fromisoformat(r['due_date'])
-        reminder['due_date_formatted'] = due_date.strftime("%b %d, %Y at %I:%M %p")
-        
-        if due_date < now:
-            reminder['is_overdue'] = True
-        else:
-            reminder['is_overdue'] = False
-        reminders.append(reminder)
+        try:
+            reminder = dict(r)
+            due_date = parse(r['due_date'])
+            reminder['due_date_formatted'] = due_date.strftime("%b %d, %Y at %I:%M %p")
+            
+            # Get the original email's subject
+            classification = database.get_classification_by_id(r['source_email_id'])
+            reminder['email_subject'] = classification['subject'] if classification else "Unknown"
+
+            reminder['is_overdue'] = due_date < now
+            reminders.append(reminder)
+        except Exception as e:
+            print(f"Error processing reminder {r['id']}: {e}")
+            continue
 
     return render_template("reminders.html", reminders=reminders)
 
@@ -404,5 +413,68 @@ def complete_reminder(reminder_id):
     # Redirect back to the reminders page
     return redirect("/reminders")
     
+    
+@app.route("/calendar_command", methods=['POST'])
+def calendar_command():
+    tokens = session.get("tokens")
+    if not tokens: return {"error": "Not authenticated"}, 401
+
+    command_text = request.json.get('command')
+    if not command_text: return {"error": "No command provided"}, 400
+
+    structured_command = gemini_service.interpret_calendar_command(command_text)
+    print("AI Response:", structured_command)
+
+    if "error" in structured_command:
+        return {"error": structured_command['error']}, 400
+
+    tool_call = structured_command.get('tool_call')
+    parameters = structured_command.get('parameters')
+    access_token = tokens.get('access_token')
+
+    if tool_call == 'create_event':
+        success = gmail_service.create_calendar_event(access_token, parameters)
+        if success:
+            return {"message": f"Success! Event '{parameters.get('summary')}' was scheduled."}
+        else:
+            return {"error": "Failed to create the event in Google Calendar."}, 500
+        
+    
+    elif tool_call == 'delete_event' or tool_call == 'update_event':
+        find_query = parameters.get('find_query')
+        if not find_query:
+            return {"error": "The AI could not determine which event to modify."}, 400
+
+        events = gmail_service.find_calendar_events(access_token, find_query)
+        
+        if not events:
+            return {"error": f"I couldn't find any events matching '{find_query}'."}, 404
+        if len(events) > 1:
+            return {"error": f"I found multiple events matching '{find_query}'. Please be more specific."}, 400
+
+        # If we find exactly one event, proceed
+        event_to_modify = events[0]
+
+        if tool_call == 'delete_event':
+            success = gmail_service.delete_calendar_event(access_token, event_to_modify['id'])
+            if success:
+                return {"message": f"Success! The event '{event_to_modify['summary']}' was removed."}
+            else:
+                return {"error": "Found the event, but failed to remove it."}, 500
+        
+        elif tool_call == 'update_event':
+            # Prepare the update payload for the Google Calendar API
+            updates = {
+                'start': {'dateTime': parameters.get('new_start_time'), 'timeZone': 'Asia/Kolkata'},
+                'end': {'dateTime': parameters.get('new_end_time'), 'timeZone': 'Asia/Kolkata'}
+            }
+            updated_event = gmail_service.modify_calendar_event(access_token, event_to_modify['id'], updates)
+            if updated_event:
+                return {"message": f"Success! The event '{updated_event['summary']}' was moved."}
+            else:
+                return {"error": "Found the event, but failed to move it."}, 500
+
+    return {"error": "I don't know how to handle that command yet."}, 400
+
 if __name__ == "__main__":
     app.run(debug=False, host='0.0.0.0', port=5000)

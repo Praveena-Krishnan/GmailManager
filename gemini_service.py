@@ -1,18 +1,55 @@
-# in gemini_service.py
-
 import os
 import requests
 import json
 from dotenv import load_dotenv
+import time
+from datetime import datetime
+
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash-latest:generateContent"
 
-# In gemini_service.py
+
+# --- Central API caller with retry logic ---
+def _call_gemini_api_with_retry(data, max_retries=3):
+    """A robust, internal function to call the Gemini API with retry logic."""
+    headers = {"Content-Type": "application/json"}
+    params = {"key": GEMINI_API_KEY}
+    
+    for attempt in range(max_retries):
+        try:
+            response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data)
+            response.raise_for_status()
+            
+            candidates = response.json().get("candidates", [])
+            if not candidates:
+                print("Error: Gemini API returned no candidates.")
+                return None
+
+            if "responseSchema" in data.get("generationConfig", {}):
+                return json.loads(candidates[0]["content"]["parts"][0]["text"])
+            else:
+                return candidates[0]["content"]["parts"][0]["text"]
+
+        except requests.exceptions.HTTPError as http_err:
+            if http_err.response.status_code in [429, 503]:
+                delay = (2 ** attempt) + 1
+                print(f"API busy ({http_err.response.status_code}). Retrying in {delay} seconds...")
+                time.sleep(delay)
+            else:
+                print(f"HTTP error occurred: {http_err}\nResponse body: {http_err.response.text}")
+                return None
+        except Exception as e:
+            print(f"An unexpected error occurred during API call: {e}")
+            return None
+    
+    print("API call failed after multiple retries.")
+    return None
+
 
 def process_single_email_with_gemini(email):
-    """Sends email content to Gemini for classification and returns a structured dict."""
+    """Performs the main classification and analysis of an email."""
     prompt = f"""
     You are an expert email analysis assistant. Your task is to analyze an email and return a structured JSON object.
 
@@ -44,40 +81,23 @@ def process_single_email_with_gemini(email):
                     "category": {"type": "string"}, "confidence": {"type": "number"},
                     "priority_analysis": {"type": "string"},
                     "category_reason": {"type": "string"},
-                    "summary": {"type": "string"}, "important_terms": {"type": "array", "items": {"type": "string"}},
+                    "summary": {"type": "string"},
+                    "important_terms": {
+                        "type": "array",
+                        # CORRECTED: Was {"string"}, now {"type": "string"}
+                        "items": {"type": "string"}
+                    },
                     "response_draft": {"type": "string"}
-                    # The old 'reason' field is correctly removed from here.
                 },
-                # CORRECTED: The required list now matches all the fields we need.
-                "required": [
-                    "subject", "sender", "body", "category", "confidence",
-                    "priority_analysis", "category_reason", "summary",
-                    "important_terms", "response_draft"
-                ]
+                "required": ["subject", "sender", "body", "category", "confidence", "priority_analysis", "category_reason", "summary", "important_terms", "response_draft"]
             }
         }
     }
-    headers = {"Content-Type": "application/json"}
-    params = {"key": GEMINI_API_KEY}
-    try:
-        response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data)
-        response.raise_for_status()
-        candidates = response.json().get("candidates", [])
-        if not candidates:
-            print("Error: Gemini API returned no candidates.")
-            return None
-        return json.loads(candidates[0]["content"]["parts"][0]["text"])
-    except requests.exceptions.HTTPError as http_err:
-        print(f"HTTP error occurred: {http_err}\nResponse body: {response.text}")
-        return None
-    except Exception as e:
-        print(f"Unexpected error in Gemini processing: {e}")
-        return None
-    
+    return _call_gemini_api_with_retry(data)
+
+
 def generate_draft_from_thread(conversation_thread):
-    """
-    NEW: A specialized function that analyzes a full thread to generate a smart response draft.
-    """
+    """Analyzes a full thread to generate a smart response draft."""
     prompt = f"""
     You are an expert email assistant. You have been provided with an entire email conversation thread.
     Your task is to generate a concise, professional, and context-aware response draft to the LAST email in the thread.
@@ -88,27 +108,9 @@ def generate_draft_from_thread(conversation_thread):
 
     DRAFT YOUR RESPONSE:
     """
-    # This prompt asks for a simple text response, not JSON.
     data = { "contents": [{"parts": [{"text": prompt}]}]}
-    headers = {"Content-Type": "application/json"}
-    params = {"key": GEMINI_API_KEY}
-    try:
-        response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data)
-        response.raise_for_status()
-        # Extract the plain text draft from the response
-        return response.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except Exception as e:
-        print(f"Error in Gemini draft generation: {e}")
-        return None
-    
-    
-    # Add this new function to the end of gemini_service.py
-    
-    # In gemini_service.py
+    return _call_gemini_api_with_retry(data)
 
-# In gemini_service.py
-
-# In gemini_service.py
 
 def find_event_in_email(email):
     """A specialized function that ONLY looks for schedulable events in an email."""
@@ -152,12 +154,10 @@ def find_event_in_email(email):
                 "type": "object",
                 "properties": {
                     "event_details": {
-                        "type": "object",
-                        "nullable": True,
+                        "type": "object", "nullable": True,
                         "properties": {
                             "type": {"type": "string", "enum": ["meeting", "deadline"]},
-                            "summary": {"type": "string"},
-                            "time_expression": {"type": "string"},
+                            "summary": {"type": "string"}, "time_expression": {"type": "string"},
                             "description": {"type": "string"}
                         },
                         "required": ["type", "summary", "time_expression"]
@@ -166,15 +166,60 @@ def find_event_in_email(email):
             }
         }
     }
-    # ... (The rest of the function for the API call is the same)
-    headers = {"Content-Type": "application/json"}
-    params = {"key": GEMINI_API_KEY}
-    try:
-        response = requests.post(GEMINI_API_URL, headers=headers, params=params, json=data)
-        response.raise_for_status()
-        candidates = response.json().get("candidates", [])
-        if not candidates: return None
-        return json.loads(candidates[0]["content"]["parts"][0]["text"])
-    except Exception as e:
-        print(f"Error in Gemini event finding: {e}")
-        return None
+    return _call_gemini_api_with_retry(data)
+
+
+
+
+def interpret_calendar_command(command_text):
+    """Uses Gemini to convert a natural language command into a structured JSON object."""
+    prompt = f"""
+    You are a helpful AI assistant. Your task is to interpret a user's natural language command and translate it into a structured JSON object representing a function call.
+
+    AVAILABLE TOOLS:
+    1. create_event(summary: str, start_time: str, end_time: str, description: str = None)
+    2. delete_event(find_query: str)
+    3. update_event(find_query: str, new_start_time: str, new_end_time: str)
+
+    RULES:
+    - The current date is: {datetime.now().strftime('%Y-%m-%d')}
+    - You must respond ONLY with a single JSON object.
+    - If the command is unclear, respond with: {{"error": "Command is unclear."}}
+    - 'start_time' and 'end_time' MUST be in ISO 8601 format: 'YYYY-MM-DDTHH:MM:SS'.
+    - Assume event duration is 1 hour if not specified.
+    ---
+
+    ACTUAL TASK:
+    User Command: "{command_text}"
+    AI Response:
+    """
+    data = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "object",
+                "properties": {
+                    "tool_call": {"type": "string"},
+                    "parameters": {
+                        "type": "object",
+                        # CORRECTED: Added the missing 'properties' and 'required' for the parameters object
+                        "properties": {
+                            "summary": {"type": "string"},
+                            "start_time": {"type": "string"},
+                            "end_time": {"type": "string"},
+                            "description": {"type": "string"},
+                            "find_query": {"type": "string"},
+                            "new_start_time": {"type": "string"},
+                            "new_end_time": {"type": "string"}
+                        }
+                    },
+                    "error": {"type": "string"}
+                }
+            }
+        }
+    }
+    structured_command = _call_gemini_api_with_retry(data)
+    if not structured_command:
+        return {"error": "Failed to interpret command after retries."}
+    return structured_command

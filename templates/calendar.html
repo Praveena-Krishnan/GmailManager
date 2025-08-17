@@ -4,7 +4,7 @@
 <div class="d-flex justify-content-between align-items-center mb-4">
   <div>
     <h1 class="h2 mb-0">Smart Calendar</h1>
-    <p class="text-muted">Email-to-calendar conversion with conflict detection</p>
+    <p class="text-muted">Because every minute matters!</p>
   </div>
   <div>
     <button class="btn btn-secondary">Today</button>
@@ -14,6 +14,17 @@
 
 <div class="row g-4">
   <div class="col-md-9">
+
+    <div class="card bg-dark border-secondary mb-4">
+      <div class="card-body">
+        <div class="input-group">
+          <span class="input-group-text bg-dark border-secondary"><i class="bi bi-magic"></i></span>
+          <input type="text" id="commandInput" class="form-control bg-dark text-white border-secondary" placeholder="e.g., Schedule a meeting with the team tomorrow at 4pm...">
+          <button class="btn btn-primary" type="button" id="submitCommandBtn">Submit</button>
+        </div>
+        <div id="commandResponse" class="mt-3 small text-muted"></div>
+      </div>
+    </div>
     
     {% if latest_suggestion %}
     <div class="alert alert-custom-success d-flex align-items-center" role="alert">
@@ -56,6 +67,7 @@
 
 <script>
   document.addEventListener('DOMContentLoaded', function() {
+    // --- FullCalendar Initialization ---
     var calendarEl = document.getElementById('calendar');
     var calendar = new FullCalendar.Calendar(calendarEl, {
       initialView: 'dayGridMonth',
@@ -65,10 +77,50 @@
         center: 'title',
         right: 'dayGridMonth,timeGridWeek,listWeek'
       },
-      // Load the event data from our Flask backend
       events: {{ calendar_events_json | safe }}
     });
     calendar.render();
+
+    // --- NEW: Conversational Command Bar Logic ---
+    const commandInput = document.getElementById('commandInput');
+    const submitBtn = document.getElementById('submitCommandBtn');
+    const responseDiv = document.getElementById('commandResponse');
+
+    async function handleCommand() {
+        const commandText = commandInput.value;
+        if (!commandText) return;
+
+        submitBtn.disabled = true;
+        responseDiv.innerHTML = '<div class="spinner-border spinner-border-sm" role="status"></div> Processing your request...';
+
+        try {
+            const response = await fetch('/calendar_command', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ command: commandText })
+            });
+            const data = await response.json();
+
+            if (response.ok) {
+                responseDiv.innerHTML = `<span class="text-success">${data.message}</span>`;
+                setTimeout(() => window.location.reload(), 2000);
+            } else {
+                throw new Error(data.error || 'An unknown error occurred.');
+            }
+        } catch (error) {
+            responseDiv.innerHTML = `<span class="text-danger">Error: ${error.message}</span>`;
+        } finally {
+            submitBtn.disabled = false;
+            commandInput.value = '';
+        }
+    }
+
+    submitBtn.addEventListener('click', handleCommand);
+    commandInput.addEventListener('keypress', function(e) {
+        if (e.key === 'Enter') {
+            handleCommand();
+        }
+    });
   });
 </script>
 {% endblock %}

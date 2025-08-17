@@ -6,7 +6,6 @@
     <h1 class="h2 mb-0">Proactive Reminders</h1>
     <p class="text-muted">AI-powered follow-up tracking and deadline management</p>
   </div>
-  <a href="#" class="btn btn-primary">Mark All Read</a>
 </div>
 
 {% for item in reminders %}
@@ -16,17 +15,15 @@
             <div class="flex-grow-1">
                 <div class="mb-2">
                     <span class="badge {% if item.is_overdue %}bg-danger-subtle text-danger-emphasis{% else %}bg-primary-subtle text-primary-emphasis{% endif %}">High priority</span>
-                    
-                    {% if item.is_overdue %}
-                        <span class="badge bg-danger-subtle text-danger-emphasis">OVERDUE</span>
-                    {% endif %}
+                    {% if item.is_overdue %}<span class="badge bg-danger-subtle text-danger-emphasis">OVERDUE</span>{% endif %}
                 </div>
                 <h5 class="mb-1">{{ item.summary }}</h5>
-                <p class="mb-1 text-muted"><small>From email about "{{ database.get_classification_by_id(item.source_email_id).subject }}"</small></p>
+                <p class="mb-1 text-muted"><small>From email about "{{ item.email_subject }}"</small></p>
                 <p class="mb-0 text-muted"><strong>Due:</strong> {{ item.due_date_formatted }}</p>
             </div>
-            <div class="ms-3">
-                <a href="/complete_reminder/{{ item.id }}" class="btn btn-outline-success">Complete</a>
+            <div class="ms-3 d-grid gap-2">
+                <a href="/classification/{{ item.source_email_id }}" class="btn btn-outline-secondary btn-sm">View Email</a>
+                <a href="/complete_reminder/{{ item.id }}" class="btn btn-outline-success btn-sm">Complete</a>
             </div>
         </div>
     </div>
