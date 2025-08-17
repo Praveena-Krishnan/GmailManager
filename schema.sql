@@ -41,3 +41,18 @@ CREATE TABLE reminders (
     source_email_id INTEGER,
     FOREIGN KEY (source_email_id) REFERENCES classifications (id)
 );
+
+CREATE TABLE user_settings (
+    id INTEGER PRIMARY KEY,
+    -- These are placeholders for now
+    enable_auto_categorization BOOLEAN NOT NULL CHECK (enable_auto_categorization IN (0, 1)),
+    enable_draft_suggestions BOOLEAN NOT NULL CHECK (enable_draft_suggestions IN (0, 1)),
+    -- NEW: Columns for working hours
+    work_start_time TEXT,
+    work_end_time TEXT,
+    work_timezone TEXT
+);
+
+-- Insert a single row with default settings
+INSERT INTO user_settings (id, enable_auto_categorization, enable_draft_suggestions, work_start_time, work_end_time, work_timezone) 
+VALUES (1, 1, 1, '09:00', '17:00', 'UTC');

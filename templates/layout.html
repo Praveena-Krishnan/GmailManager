@@ -27,11 +27,36 @@
     <div class="sidebar d-flex flex-column">
       <div class="sidebar-header">Zentra</div>
       <ul class="nav flex-column">
-        <li class="nav-item"><a class="nav-link" href="/recent_classified"><i class="bi bi-inbox-fill me-2"></i> Inbox</a></li>
-        <li class="nav-item"><a class="nav-link" href="/calendar"><i class="bi bi-calendar3 me-2"></i> Calendar</a></li>
-        <li class="nav-item"><a class="nav-link" href="/suggestions"><i class="bi bi-calendar-plus-fill me-2"></i> Event Suggestions</a></li>
         <li class="nav-item">
-          <a class="nav-link" href="/reminders"><i class="bi bi-bell-fill me-2"></i> Reminders</a>
+          <a class="nav-link" href="/recent_classified">
+            <i class="bi bi-inbox-fill me-2"></i> Inbox
+          </a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link" href="/calendar">
+            <i class="bi bi-calendar3 me-2"></i> Calendar
+          </a>
+        </li>
+        
+        <li class="nav-item">
+          <a class="nav-link d-flex align-items-center" href="/reminders">
+            <i class="bi bi-bell-fill me-2"></i>
+            <span>Reminders</span>
+            {% if pending_reminders_count > 0 %}
+              <span class="badge bg-danger rounded-pill ms-auto">{{ pending_reminders_count }}</span>
+            {% endif %}
+          </a>
+        </li>
+
+        <li class="nav-item">
+          <a class="nav-link" href="/suggestions">
+            <i class="bi bi-calendar-plus-fill me-2"></i> Event Suggestions
+          </a>
+        </li>
+        <li class="nav-item mt-auto">
+          <a class="nav-link" href="/settings">
+            <i class="bi bi-gear-fill me-2"></i> Settings
+          </a>
         </li>
       </ul>
     </div>

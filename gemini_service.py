@@ -171,24 +171,30 @@ def find_event_in_email(email):
 
 
 
-def interpret_calendar_command(command_text):
-    """Uses Gemini to convert a natural language command into a structured JSON object."""
-    prompt = f"""
-    You are a helpful AI assistant. Your task is to interpret a user's natural language command and translate it into a structured JSON object representing a function call.
+# In gemini_service.py
 
-    AVAILABLE TOOLS:
-    1. create_event(summary: str, start_time: str, end_time: str, description: str = None)
-    2. delete_event(find_query: str)
-    3. update_event(find_query: str, new_start_time: str, new_end_time: str)
+def interpret_calendar_command(command_text):
+    """Uses Gemini to extract intent and entities from a command."""
+    prompt = f"""
+    You are an AI assistant that extracts entities from a user's calendar command.
+    Extract the user's intent ("create", "delete", "update") and any relevant text phrases for the event.
 
     RULES:
     - The current date is: {datetime.now().strftime('%Y-%m-%d')}
-    - You must respond ONLY with a single JSON object.
-    - If the command is unclear, respond with: {{"error": "Command is unclear."}}
-    - 'start_time' and 'end_time' MUST be in ISO 8601 format: 'YYYY-MM-DDTHH:MM:SS'.
-    - Assume event duration is 1 hour if not specified.
+    - For "delete" or "update", "event_description" is the event to find.
+    - For "create", "event_description" is the title of the new event.
+    - For "create" or "update", "time_description" is the new time.
+    - Respond ONLY with a JSON object.
     ---
-
+    EXAMPLE:
+    User Command: "create a meeting about the Q4 budget this Friday at noon"
+    AI Response:
+    {{
+      "intent": "create",
+      "event_description": "Meeting about the Q4 budget",
+      "time_description": "this Friday at noon"
+    }}
+    ---
     ACTUAL TASK:
     User Command: "{command_text}"
     AI Response:
@@ -200,22 +206,12 @@ def interpret_calendar_command(command_text):
             "responseSchema": {
                 "type": "object",
                 "properties": {
-                    "tool_call": {"type": "string"},
-                    "parameters": {
-                        "type": "object",
-                        # CORRECTED: Added the missing 'properties' and 'required' for the parameters object
-                        "properties": {
-                            "summary": {"type": "string"},
-                            "start_time": {"type": "string"},
-                            "end_time": {"type": "string"},
-                            "description": {"type": "string"},
-                            "find_query": {"type": "string"},
-                            "new_start_time": {"type": "string"},
-                            "new_end_time": {"type": "string"}
-                        }
-                    },
+                    "intent": {"type": "string"},
+                    "event_description": {"type": "string"},
+                    "time_description": {"type": "string"},
                     "error": {"type": "string"}
-                }
+                },
+                "required": ["intent", "event_description"]
             }
         }
     }

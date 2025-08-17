@@ -5,13 +5,13 @@ from dotenv import load_dotenv
 import time
 import sqlite3
 import re
+import json
+from datetime import datetime, timedelta, timezone
+from dateutil.parser import parse
+import pytz
 import database
 import gmail_service
 import gemini_service
-from dateutil.parser import parse
-from datetime import timedelta, timezone
-import json
-from datetime import datetime
 
 load_dotenv()
 
@@ -20,6 +20,9 @@ if not os.path.exists(database.DATABASE_FILE):
 
 STARTUP_TIMESTAMP = int(time.time() * 1000)
 print(f"Application started. Ignoring emails received before timestamp: {STARTUP_TIMESTAMP}")
+
+
+
 
 # --- App Configuration ---
 app = Flask(__name__)
@@ -34,6 +37,12 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 last_tokens = {}
 
 # --- Authentication Routes ---
+@app.context_processor
+def inject_counts():
+    """Injects dynamic counts into all templates."""
+    pending_reminders_count = database.get_pending_reminders_count()
+    return dict(pending_reminders_count=pending_reminders_count)
+
 @app.route("/")
 def index():
     if "user" in session: return redirect("/recent_classified")
@@ -66,32 +75,18 @@ def recent_classified_view():
     category_colors = {"Urgent": "danger", "To Respond": "warning", "Meeting": "primary", "FYI": "info", "Uncategorized": "secondary"}
     return render_template("history.html", classifications=classifications, counts=category_counts, category_colors=category_colors)
 
-# In app.py
-
 @app.route("/classification/<int:classification_id>")
 def classification_detail_view(classification_id):
     classification = database.get_classification_by_id(classification_id)
-    if not classification:
-        return "Classification not found", 404
-
-    # NEW: Fetch the corresponding event suggestion, if one exists
+    if not classification: return "Classification not found", 404
     suggestion = database.get_suggestion_by_classification_id(classification_id)
-
-    # Logic to highlight important terms in the summary
     summary = classification['summary']
     if classification['important_terms']:
         terms = [term.strip() for term in classification['important_terms'].split(',')]
         for term in terms:
             if term:
                 summary = re.sub(f'({re.escape(term)})', r'<span class="highlight">\1</span>', summary, flags=re.IGNORECASE)
-
-    # MODIFIED: Pass the new 'suggestion' object to the template
-    return render_template(
-        "detail.html",
-        classification=classification,
-        highlighted_summary=summary,
-        suggestion=suggestion
-    )
+    return render_template("detail.html", classification=classification, highlighted_summary=summary, suggestion=suggestion)
 
 @app.route("/send_reply/<int:classification_id>", methods=["POST"])
 def send_reply(classification_id):
@@ -100,7 +95,10 @@ def send_reply(classification_id):
     classification = database.get_classification_by_id(classification_id)
     if not classification: return "Error: Original message not found.", 404
     reply_body = request.form.get("reply_body")
+    
+    # CORRECTED: Use get_full_message which exists in our service
     original_message = gmail_service.get_full_message(tokens.get("access_token"), classification['gmail_message_id'])
+    
     if not original_message: return "Error: Could not fetch original thread info from Gmail.", 500
     thread_id = original_message.get('threadId')
     to_address = classification['sender']
@@ -110,8 +108,6 @@ def send_reply(classification_id):
     else: return "Failed to send email.", 500
 
 # --- Background Webhook Route ---
-# In app.py
-
 @app.route("/pubsub/push", methods=["POST"])
 def pubsub_push():
     if PUBSUB_VERIFICATION_TOKEN and request.args.get("token") != PUBSUB_VERIFICATION_TOKEN: return "Unauthorized", 401
@@ -170,17 +166,13 @@ def pubsub_push():
 
         # AI Call 3 (Conditional): Find Events
         if classification_result.get('category') in ['Meeting', 'To Respond', 'Urgent']:
-            print(f"Checking for events in email {mid}...")
             event_result = gemini_service.find_event_in_email(email_content)
             if event_result and event_result.get('event_details'):
                 event_details = event_result['event_details']
                 event_type = event_details.get('type')
                 if event_type == 'meeting':
-                    print(f"Found a potential meeting: {event_details.get('summary')}")
                     database.add_suggestion(event_details, classification_id)
                 elif event_type == 'deadline':
-                    print(f"Found a potential deadline: {event_details.get('summary')}")
-                    # CORRECTED: Use 'time_expression' which is what the AI provides
                     database.add_reminder(
                         summary=event_details.get('summary'),
                         due_date=event_details.get('time_expression'),
@@ -192,228 +184,120 @@ def pubsub_push():
     except Exception as e:
         print(f"Push handler error: {e}")
         return "OK", 200
-# In app.py
 
 @app.route("/check_conflicts/<int:suggestion_id>")
 def check_conflicts(suggestion_id):
     tokens = session.get("tokens")
-    if not tokens: 
-        return {"error": "Not authenticated"}, 401
-
-    # Get the specific suggestion from the database
+    if not tokens: return {"error": "Not authenticated"}, 401
     suggestion = database.get_suggestion(suggestion_id)
-    if not suggestion: 
-        return {"error": "Suggestion not found"}, 404
-
+    if not suggestion: return {"error": "Suggestion not found"}, 404
     time_expression = suggestion['time_expression']
-    
     try:
-        # Parse the human-readable time from the database
         start_time = parse(time_expression)
-        # Assume a 1-hour duration if no end time is specified
         end_time = start_time + timedelta(hours=1)
     except Exception as e:
-        print(f"Date parsing error: {e}")
         return {"error": f"Could not understand the date/time: '{time_expression}'"}, 400
-
-    # Format for Google Calendar API (RFC3339)
     start_iso = start_time.astimezone(timezone.utc).isoformat()
     end_iso = end_time.astimezone(timezone.utc).isoformat()
-
-    # Check for conflicting events in Google Calendar
     calendar_url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-    params = {
-        'timeMin': start_iso,
-        'timeMax': end_iso,
-        'singleEvents': True,
-        'orderBy': 'startTime'
-    }
+    params = {'timeMin': start_iso, 'timeMax': end_iso, 'singleEvents': True, 'orderBy': 'startTime'}
     res = requests.get(calendar_url, headers={"Authorization": f"Bearer {tokens.get('access_token')}"}, params=params)
-    
-    conflicts = []
-    if res.status_code == 200:
-        conflicts = [event.get('summary') for event in res.json().get('items', [])]
-    else:
-        print(f"Error checking calendar: {res.text}")
-
-    # Placeholder for a short description (can be upgraded with another AI call later)
-    short_description = "AI-suggested event"
-
-    return {
-        "details": {
-            "summary": suggestion['summary'],
-            "time_expression": time_expression
-        },
-        "short_description": short_description,
-        "conflicts": conflicts
-    }
+    conflicts = [event.get('summary') for event in res.json().get('items', [])] if res.status_code == 200 else []
+    return {"details": {"summary": suggestion['summary'], "time_expression": time_expression}, "conflicts": conflicts}
 
 @app.route("/schedule_event/<int:suggestion_id>")
 def schedule_event(suggestion_id):
     tokens = session.get("tokens")
     if not tokens: return redirect("/")
-
     suggestion = database.get_suggestion(suggestion_id)
     if not suggestion: return "Error: Suggestion not found.", 404
-
     try:
         start_time = parse(suggestion['time_expression'])
         end_time = start_time + timedelta(hours=1)
     except Exception as e:
         return f"Error: Could not parse the time '{suggestion['time_expression']}'. Details: {e}", 500
-    
     classification = database.get_classification_by_id(suggestion['source_email_id'])
     sender_email = classification['sender'] if classification else ''
-
     event = {
         'summary': suggestion['summary'],
-        'description': f"Event created by Zentra based on email: {classification['subject']}",
+        'description': f"Event created by Zentra from email: {classification['subject']}",
         'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
         'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
         'attendees': [{'email': sender_email}]
     }
-    
-    # --- NEW: DETAILED LOGGING ---
-    print("\n--- SCHEDULING EVENT ---")
-    print(f"Original Time Expression: {suggestion['time_expression']}")
-    print(f"Parsed Start Time (Local): {start_time}")
-    print("Sending the following payload to Google Calendar:")
-    print(json.dumps(event, indent=2))
-    # --- END OF LOGGING ---
-
     calendar_url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-    headers = {"Authorization": f"Bearer {tokens.get('access_token')}"}
-    
-    res = requests.post(calendar_url, headers=headers, json=event)
-
-    # --- NEW: LOGGING THE RESPONSE ---
-    print("\n--- GOOGLE CALENDAR RESPONSE ---")
-    print(f"Status Code: {res.status_code}")
-    print(f"Response Body: {res.text}")
-    print("---------------------------\n")
-    # --- END OF LOGGING ---
-
+    res = requests.post(calendar_url, headers={"Authorization": f"Bearer {tokens.get('access_token')}"}, json=event)
     if res.status_code in [200, 201]:
         database.update_suggestion_status(suggestion_id, 'accepted')
         return redirect("/recent_classified")
     else:
-        # We will now see the detailed error from Google here
-        return f"Error creating event. See terminal log for details.", 500
-    
+        return f"Error creating event: {res.text}", 500
 
 @app.route("/calendar")
 def calendar_view():
     tokens = session.get("tokens")
     if not tokens: return redirect("/")
-    
     upcoming_events = gmail_service.get_upcoming_events(tokens.get('access_token'))
-    
-    # NEW: Format events for FullCalendar
-    calendar_events = []
-    for event in upcoming_events:
-        calendar_events.append({
-            "title": event['summary'],
-            "start": event['start_time']
-        })
-
-    # Convert to JSON to safely pass to the template's JavaScript
+    calendar_events = [{"title": event['summary'], "start": event['start_time']} for event in upcoming_events]
     calendar_events_json = json.dumps(calendar_events)
-    
     pending_suggestions = database.get_pending_suggestions()
     latest_suggestion = pending_suggestions[0] if pending_suggestions else None
-    
-    return render_template(
-        "calendar.html",
-        upcoming_events_list=upcoming_events, # For the sidebar
-        latest_suggestion=latest_suggestion,
-        calendar_events_json=calendar_events_json # For the main calendar grid
-    )
-    
-
+    return render_template("calendar.html", upcoming_events_list=upcoming_events, latest_suggestion=latest_suggestion, calendar_events_json=calendar_events_json)
 
 @app.route("/manual_schedule/<int:classification_id>", methods=["POST"])
 def manual_schedule(classification_id):
     tokens = session.get("tokens")
     if not tokens: return redirect("/")
-
     summary = request.form.get("summary")
     start_time_str = request.form.get("start_time")
-    
     try:
         start_time = datetime.fromisoformat(start_time_str)
         end_time = start_time + timedelta(hours=1)
     except (ValueError, TypeError):
         return "Invalid date format submitted.", 400
-
     classification = database.get_classification_by_id(classification_id)
     sender_email = classification['sender'] if classification else ''
-    
     event = {
-        'summary': summary,
-        'description': f"Event manually created by Zentra from email: {classification['subject']}",
+        'summary': summary, 'description': f"Event manually created by Zentra from email: {classification['subject']}",
         'start': {'dateTime': start_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
         'end': {'dateTime': end_time.isoformat(), 'timeZone': 'Asia/Kolkata'},
         'attendees': [{'email': sender_email}]
     }
-
     calendar_url = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
-    res = requests.post(
-        calendar_url,
-        headers={"Authorization": f"Bearer {tokens.get('access_token')}"},
-        json=event
-    )
-
+    res = requests.post(calendar_url, headers={"Authorization": f"Bearer {tokens.get('access_token')}"}, json=event)
     if res.status_code in [200, 201]:
-        # NEW: Create a record in our local database
-        event_details = {
-            "type": "meeting",
-            "summary": summary,
-            "time_expression": start_time.strftime("%B %d, %Y at %I:%M %p")
-        }
+        event_details = {"type": "meeting", "summary": summary, "time_expression": start_time.strftime("%B %d, %Y at %I:%M %p")}
         database.add_suggestion(event_details, classification_id, status='accepted')
-        
         return redirect(f"/classification/{classification_id}")
     else:
         return f"Error creating event: {res.text}", 500
-    
-
-# In app.py
-
-# In app.py
 
 @app.route("/reminders")
 def reminders_view():
     reminders_raw = database.get_reminders(status='active')
-    
     reminders = []
     now = datetime.now()
-
     for r in reminders_raw:
         try:
             reminder = dict(r)
             due_date = parse(r['due_date'])
             reminder['due_date_formatted'] = due_date.strftime("%b %d, %Y at %I:%M %p")
-            
-            # Get the original email's subject
             classification = database.get_classification_by_id(r['source_email_id'])
             reminder['email_subject'] = classification['subject'] if classification else "Unknown"
-
             reminder['is_overdue'] = due_date < now
             reminders.append(reminder)
         except Exception as e:
             print(f"Error processing reminder {r['id']}: {e}")
             continue
-
     return render_template("reminders.html", reminders=reminders)
 
 @app.route("/complete_reminder/<int:reminder_id>")
 def complete_reminder(reminder_id):
-    # Update the status in the database
     database.update_reminder_status(reminder_id, 'completed')
-    # Redirect back to the reminders page
     return redirect("/reminders")
     
-    
+# In app.py
+
 @app.route("/calendar_command", methods=['POST'])
 def calendar_command():
     tokens = session.get("tokens")
@@ -422,59 +306,105 @@ def calendar_command():
     command_text = request.json.get('command')
     if not command_text: return {"error": "No command provided"}, 400
 
-    structured_command = gemini_service.interpret_calendar_command(command_text)
-    print("AI Response:", structured_command)
+    ai_result = gemini_service.interpret_calendar_command(command_text)
+    print("AI Interpretation:", ai_result)
 
-    if "error" in structured_command:
-        return {"error": structured_command['error']}, 400
+    if "error" in ai_result:
+        return {"error": ai_result['error']}, 400
 
-    tool_call = structured_command.get('tool_call')
-    parameters = structured_command.get('parameters')
+    intent = ai_result.get('intent')
     access_token = tokens.get('access_token')
 
-    if tool_call == 'create_event':
-        success = gmail_service.create_calendar_event(access_token, parameters)
-        if success:
-            return {"message": f"Success! Event '{parameters.get('summary')}' was scheduled."}
-        else:
-            return {"error": "Failed to create the event in Google Calendar."}, 500
-        
-    
-    elif tool_call == 'delete_event' or tool_call == 'update_event':
-        find_query = parameters.get('find_query')
-        if not find_query:
-            return {"error": "The AI could not determine which event to modify."}, 400
+    if intent == 'create':
+        try:
+            time_desc = ai_result.get('time_description')
+            if not time_desc:
+                return {"error": "Please specify a time for the new event."}, 400
 
+            start_time = parse(time_desc)
+            end_time = start_time + timedelta(hours=1)
+            event_details = {
+                "summary": ai_result.get('event_description'),
+                "start_time": start_time.isoformat(),
+                "end_time": end_time.isoformat()
+            }
+            success = gmail_service.create_calendar_event(access_token, event_details)
+            if success:
+                return {"message": f"Success! Event '{event_details['summary']}' was scheduled."}
+            else:
+                return {"error": "Failed to create the event in Google Calendar."}, 500
+        except Exception as e:
+            return {"error": f"Could not understand the time: {e}"}, 400
+
+    elif intent in ['delete', 'update']:
+        find_query = ai_result.get('event_description')
         events = gmail_service.find_calendar_events(access_token, find_query)
         
-        if not events:
-            return {"error": f"I couldn't find any events matching '{find_query}'."}, 404
-        if len(events) > 1:
-            return {"error": f"I found multiple events matching '{find_query}'. Please be more specific."}, 400
-
-        # If we find exactly one event, proceed
+        if not events: return {"error": f"I couldn't find any events matching '{find_query}'."}, 404
+        if len(events) > 1: return {"error": f"I found multiple events. Please be more specific."}, 400
+        
         event_to_modify = events[0]
 
-        if tool_call == 'delete_event':
+        if intent == 'delete':
             success = gmail_service.delete_calendar_event(access_token, event_to_modify['id'])
-            if success:
-                return {"message": f"Success! The event '{event_to_modify['summary']}' was removed."}
-            else:
-                return {"error": "Found the event, but failed to remove it."}, 500
+            if success: return {"message": f"Success! The event '{event_to_modify['summary']}' was removed."}
+            else: return {"error": "Found the event, but failed to remove it."}, 500
         
-        elif tool_call == 'update_event':
-            # Prepare the update payload for the Google Calendar API
-            updates = {
-                'start': {'dateTime': parameters.get('new_start_time'), 'timeZone': 'Asia/Kolkata'},
-                'end': {'dateTime': parameters.get('new_end_time'), 'timeZone': 'Asia/Kolkata'}
-            }
-            updated_event = gmail_service.modify_calendar_event(access_token, event_to_modify['id'], updates)
-            if updated_event:
-                return {"message": f"Success! The event '{updated_event['summary']}' was moved."}
-            else:
-                return {"error": "Found the event, but failed to move it."}, 500
+        elif intent == 'update':
+            try:
+                new_start = parse(ai_result.get('time_description'))
+                original_start = parse(event_to_modify['start'].get('dateTime'))
+                original_end = parse(event_to_modify['end'].get('dateTime'))
+                duration = original_end - original_start
+                new_end = new_start + duration
+                
+                updates = {
+                    'start': {'dateTime': new_start.isoformat(), 'timeZone': 'Asia/Kolkata'},
+                    'end': {'dateTime': new_end.isoformat(), 'timeZone': 'Asia/Kolkata'}
+                }
+                updated_event = gmail_service.modify_calendar_event(access_token, event_to_modify['id'], updates)
+                if updated_event: return {"message": f"Success! Event moved to {new_start.strftime('%A at %I:%M %p')}."}
+                else: return {"error": "Found the event, but failed to move it."}, 500
+            except Exception as e:
+                return {"error": f"Could not understand the new time: {e}"}, 400
 
     return {"error": "I don't know how to handle that command yet."}, 400
 
+# Add this new route to app.py
+
+# In app.py
+
+@app.route("/settings")
+def settings_view():
+    # Fetch the user's current settings from the database
+    settings = database.get_user_settings()
+    
+    # Fetch the total number of emails processed
+    total_count = database.get_total_classifications_count()
+    
+    # Pass BOTH the settings object and the count to the template
+    return render_template(
+        "settings.html", 
+        settings=settings, 
+        emails_processed_count=total_count
+    )
+    
+# In app.py
+
+@app.route("/update_settings", methods=['POST'])
+def update_settings():
+    # Get the form data from the toggle switches and inputs
+    settings = {
+        'auto_categorization': 1 if 'auto_categorization' in request.form else 0,
+        'draft_suggestions': 1 if 'draft_suggestions' in request.form else 0,
+        'work_start_time': request.form.get('work_start_time'),
+        'work_end_time': request.form.get('work_end_time'),
+        'work_timezone': request.form.get('work_timezone')
+    }
+    # Save the new settings to the database
+    database.update_user_settings(settings)
+    # Redirect back to the settings page
+    return redirect("/settings")
+    
 if __name__ == "__main__":
     app.run(debug=False, host='0.0.0.0', port=5000)

@@ -5,6 +5,7 @@ DATABASE_FILE = 'history.db'
 
 def get_db_connection():
     conn = sqlite3.connect(DATABASE_FILE, timeout=10)
+    
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -174,3 +175,53 @@ def update_reminder_status(reminder_id, status):
     )
     conn.commit()
     conn.close()
+    
+
+
+def get_total_classifications_count():
+    """Counts the total number of classifications in the database."""
+    conn = get_db_connection()
+    count = conn.execute('SELECT COUNT(id) FROM classifications').fetchone()[0]
+    conn.close()
+    return count
+
+
+def get_user_settings():
+    """Retrieves the user's workflow settings."""
+    conn = get_db_connection()
+    settings = conn.execute('SELECT * FROM user_settings WHERE id = 1').fetchone()
+    conn.close()
+    return settings
+
+def update_user_settings(settings):
+    """Updates the user's workflow settings."""
+    conn = get_db_connection()
+    conn.execute(
+        '''UPDATE user_settings SET
+           enable_auto_categorization = ?,
+           enable_draft_suggestions = ?,
+           work_start_time = ?,
+           work_end_time = ?,
+           work_timezone = ?
+           WHERE id = 1''',
+        (
+            settings.get('auto_categorization', 0),
+            settings.get('draft_suggestions', 0),
+            settings.get('work_start_time'),
+            settings.get('work_end_time'),
+            settings.get('work_timezone')
+        )
+    )
+    conn.commit()
+    conn.close()
+    
+
+
+def get_pending_reminders_count():
+    """Counts the number of active reminders."""
+    conn = get_db_connection()
+    count = conn.execute(
+        "SELECT COUNT(id) FROM reminders WHERE status = 'active'"
+    ).fetchone()[0]
+    conn.close()
+    return count
