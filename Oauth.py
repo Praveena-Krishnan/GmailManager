@@ -108,6 +108,7 @@ def send_reply(classification_id):
     else: return "Failed to send email.", 500
 
 # --- Background Webhook Route ---
+
 @app.route("/pubsub/push", methods=["POST"])
 def pubsub_push():
     if PUBSUB_VERIFICATION_TOKEN and request.args.get("token") != PUBSUB_VERIFICATION_TOKEN: return "Unauthorized", 401
@@ -116,9 +117,7 @@ def pubsub_push():
     try:
         global last_tokens
         access_token = last_tokens.get("access_token") or gmail_service.refresh_access_token(CLIENT_ID, CLIENT_SECRET, last_tokens.get("refresh_token"))
-        if not access_token:
-            print("Failed to get a valid access token.")
-            return "No valid token", 200
+        if not access_token: return "No valid token", 200
         last_tokens['access_token'] = access_token
 
         message = gmail_service.get_latest_unread_message(access_token)
@@ -129,7 +128,6 @@ def pubsub_push():
         email_timestamp = int(message.get('internalDate', 0))
 
         if email_timestamp < STARTUP_TIMESTAMP:
-            print(f"Ignoring old email (ID: {mid}) from before app startup.")
             gmail_service.mark_as_read(access_token, mid)
             return "OK", 200
             
@@ -141,7 +139,6 @@ def pubsub_push():
         # AI Call 1: Classify Email
         classification_result = gemini_service.process_single_email_with_gemini(email_content)
         if not classification_result:
-            print(f"Initial classification failed for message {mid}. Marking as read to avoid loops.")
             gmail_service.mark_as_read(access_token, mid)
             return "OK", 200
 
@@ -152,8 +149,7 @@ def pubsub_push():
             if thread_data and thread_data.get('messages'):
                 conversation_str = "".join([f"--- Email From: {next((h['value'] for h in m['payload']['headers'] if h['name'].lower() == 'from'), '')} ---\n{gmail_service.get_email_body(m['payload'])}\n\n" for m in thread_data['messages']])
                 new_draft = gemini_service.generate_draft_from_thread(conversation_str)
-                if new_draft:
-                    response_draft = new_draft
+                if new_draft: response_draft = new_draft
         classification_result['response_draft'] = response_draft
 
         # Save the main classification FIRST to get its ID
@@ -193,7 +189,7 @@ def check_conflicts(suggestion_id):
     if not suggestion: return {"error": "Suggestion not found"}, 404
     time_expression = suggestion['time_expression']
     try:
-        start_time = parse(time_expression)
+        start_time = parse(time_expression,fuzzy=True)
         end_time = start_time + timedelta(hours=1)
     except Exception as e:
         return {"error": f"Could not understand the date/time: '{time_expression}'"}, 400
@@ -212,7 +208,7 @@ def schedule_event(suggestion_id):
     suggestion = database.get_suggestion(suggestion_id)
     if not suggestion: return "Error: Suggestion not found.", 404
     try:
-        start_time = parse(suggestion['time_expression'])
+        start_time = parse(suggestion['time_expression'], fuzzy=True)
         end_time = start_time + timedelta(hours=1)
     except Exception as e:
         return f"Error: Could not parse the time '{suggestion['time_expression']}'. Details: {e}", 500

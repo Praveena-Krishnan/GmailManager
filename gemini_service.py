@@ -112,31 +112,28 @@ def generate_draft_from_thread(conversation_thread):
     return _call_gemini_api_with_retry(data)
 
 
+
+# In gemini_service.py
+
 def find_event_in_email(email):
     """A specialized function that ONLY looks for schedulable events in an email."""
     prompt = f"""
-    Your single task is to analyze an email to find a schedulable event and extract the exact text describing its time.
+    Your single task is to analyze an email to find a schedulable event and extract its details.
 
     ---
     RULES:
-    - An event is a 'meeting' or a 'deadline'.
-    - If an event is found, extract its details. The 'time_expression' should be the exact phrase from the email, like "next Tuesday at 3pm" or "on August 24th".
-    - If the email mentions a date but no specific time, assume a standard business time of 10:00 AM.
-    - If no event is found, the 'event_details' field MUST be null.
+    - An event can be a 'meeting', a 'deadline', or an 'announcement' of a future event.
+    - You must do your best to find an event. If a specific date is mentioned, you must extract it.
+    - If the email mentions a date but no time, assume a standard business time of 10:00 AM.
+    - If no plausible event is found, the 'event_details' field MUST be null.
     ---
-    EXAMPLE:
-    INPUT:
-    Subject: Project Sync
-    Body: Hi team, let's sync up tomorrow, August 17th, at 2:30 PM to discuss the new designs.
-    OUTPUT JSON:
-    {{
-        "event_details": {{
-            "type": "meeting",
-            "summary": "Project Sync",
-            "time_expression": "August 17th, 2025 at 2:30 PM",
-            "description": "Discuss the new designs."
-        }}
-    }}
+    EXAMPLE 1 (Invitation):
+    INPUT: Subject: Project Sync, Body: Let's sync up tomorrow at 2:30 PM.
+    OUTPUT JSON: {{"event_details": {{"type": "meeting", "summary": "Project Sync", "time_expression": "tomorrow at 2:30 PM"}}}}
+    
+    EXAMPLE 2 (Announcement):
+    INPUT: Subject: Company Holiday, Body: The office will be closed on September 1st.
+    OUTPUT JSON: {{"event_details": {{"type": "meeting", "summary": "Company Holiday", "time_expression": "September 1st"}}}}
     ---
 
     ACTUAL TASK:
@@ -167,8 +164,6 @@ def find_event_in_email(email):
         }
     }
     return _call_gemini_api_with_retry(data)
-
-
 
 
 # In gemini_service.py
